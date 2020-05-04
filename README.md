@@ -1,2 +1,2 @@
-# DCS-Mission-Creation-Assistance-Scripts
+# DCSWORLDMissionCreationAssistanceScripts
 Need MIST4.3.74
