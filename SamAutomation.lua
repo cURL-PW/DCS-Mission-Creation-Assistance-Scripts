@@ -33,19 +33,31 @@ function SEAD_launch:onEvent(event)
             --MaxStartDelay 停波した後、送波するまでの最大時間
             if _targetMimTypeName == "1L13 EWR" then
                 Suppressed(id,100,10,11,10,11)
-            elseif _targetMimTypeName == "Kub 1S91 str" then
+            elseif _targetMimTypeName == "55G6 EWR" then
                 Suppressed(id,100,10,11,10,11)
-            elseif _targetMimTypeName == "SA-11 Buk SR 9S18M1" then
-                Suppressed(id,100,10,11,10,11)
+            elseif _targetMimTypeName == "p-19 s-125 sr" then
+                Suppressed(id,100,15,20,40,80)
             elseif _targetMimTypeName == "Dog Ear radar" then
                 Suppressed(id,100,10,11,10,11)
+            elseif _targetMimTypeName == "SNR_75V" then
+                Suppressed(id,100,10,20,40,80)
+            elseif _targetMimTypeName == "snr s-125 tr" then
+                Suppressed(id,100,10,15,20,40)
+            elseif _targetMimTypeName == "Kub 1S91 str" then
+                Suppressed(id,100,15,20,40,60)
+            elseif _targetMimTypeName == "Osa 9A33 ln" then
+                Suppressed(id,100,7,10,30,5z0)
             elseif _targetMimTypeName == "S-300PS 40B6M tr" then
                 Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "S-300PS 40B6MD sr" then
                 Suppressed(id,100,10,11,10,11)
-            elseif _targetMimTypeName == "55G6 EWR" then
-                Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "S-300PS 64H6E sr" then
+                Suppressed(id,100,10,11,10,11)
+            elseif _targetMimTypeName == "SA-11 Buk SR 9S18M1" then
+                Suppressed(id,100,10,11,10,11)
+            elseif _targetMimTypeName == "SA-11 Buk LN 9A310M1" then
+                Suppressed(id,100,10,11,10,11)
+            elseif _targetMimTypeName == "Tor 9A331" then
                 Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "Hawk tr" then
                 Suppressed(id,100,10,11,10,11)
@@ -55,11 +67,7 @@ function SEAD_launch:onEvent(event)
                 Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "Hawk cwar" then
                 Suppressed(id,100,10,11,10,11)
-            elseif _targetMimTypeName == "p-19 s-125 sr" then
-                Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "Roland Radar" then
-                Suppressed(id,100,10,11,10,11)
-            elseif _targetMimTypeName == "snr s-125 tr" then
                 Suppressed(id,100,10,11,10,11)
             else
                 Suppressed(id,100,10,11,10,11)
