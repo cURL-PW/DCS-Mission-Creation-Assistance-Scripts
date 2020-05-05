@@ -28,7 +28,7 @@ function SEAD_launch:onEvent(event)
             --id 無視
             --Suppresse_rate 0-停波せず 1-99 1％から99％停波する 100-必ず停波する
             --MinOffDelay 停波するまでの最小時間
-            --MaxOffDelay 停波するまでの最大時間a
+            --MaxOffDelay 停波するまでの最大時間
             --MinStartDelay 停波した後、送波するまでの最小時間
             --MaxStartDelay 停波した後、送波するまでの最大時間
             if _targetMimTypeName == "1L13 EWR" then
