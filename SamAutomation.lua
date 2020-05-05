@@ -13,8 +13,8 @@ function SEAD_launch:onEvent(event)
             if _targetMim == nil then
                 return
             end
-			local _targetMimname = Unit.getName(_targetMim)
-			local _targetMimgroup = Unit.getGroup(Weapon.getTarget(_SEADmissile))
+            local _targetMimname = Unit.getName(_targetMim)
+            local _targetMimgroup = Unit.getGroup(Weapon.getTarget(_SEADmissile))
             local _targetMimcont= _targetMimgroup:getController()
             local _targetMimTypeName = _targetMim:getTypeName()
             local id = {
@@ -72,7 +72,7 @@ function SEAD_launch:onEvent(event)
             else
                 Suppressed(id,100,10,11,10,11)
             end
-		end
+        end
     end
 end
 
