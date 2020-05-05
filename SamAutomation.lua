@@ -25,7 +25,7 @@ function SEAD_launch:onEvent(event)
 
             if debugmode == true then trigger.action.outText( string.format("target name " ..string.format(_targetMimTypeName)), 20) end
             --★Suppressed(id,Suppresse_rate,MinOffDelay,MaxOffDelay,MinStartDelay,MaxStartDelay)
-            --id 無視
+            --id 対象のグループネーム及びコントローラ
             --Suppresse_rate 0-停波せず 1-99 1％から99％停波する 100-必ず停波する
             --MinOffDelay 停波するまでの最小時間
             --MaxOffDelay 停波するまでの最大時間
@@ -46,7 +46,7 @@ function SEAD_launch:onEvent(event)
             elseif _targetMimTypeName == "Kub 1S91 str" then
                 Suppressed(id,100,15,20,40,60)
             elseif _targetMimTypeName == "Osa 9A33 ln" then
-                Suppressed(id,100,7,10,30,5z0)
+                Suppressed(id,100,7,10,30,50)
             elseif _targetMimTypeName == "S-300PS 40B6M tr" then
                 Suppressed(id,100,10,11,10,11)
             elseif _targetMimTypeName == "S-300PS 40B6MD sr" then
