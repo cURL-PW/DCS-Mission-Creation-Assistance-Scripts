@@ -57,7 +57,7 @@
 -- ============================================
 -- バージョン情報
 -- ============================================
-DCS_SAM_VERSION = "2.2.0"
+DCS_SAM_VERSION = "2.3.0"
 DCS_SAM_AUTHOR = "DCS Mission Creation Scripts"
 
 -- ============================================
@@ -70,7 +70,10 @@ IADS_SYSTEMS = {
     logger = nil,        -- ロガー
     pointDefense = nil,  -- ポイントディフェンス (Phase 2)
     datalink = nil,      -- データリンク (Phase 2)
-    predictor = nil      -- 航路予測 (Phase 2)
+    predictor = nil,     -- 航路予測 (Phase 2)
+    decoy = nil,         -- デコイシステム (Phase 3)
+    antiJam = nil,       -- ジャマー対策 (Phase 3)
+    maintenance = nil    -- 修復/再配置 (Phase 3)
 }
 
 -- ============================================
@@ -549,6 +552,106 @@ function createPredictorSystem(iadsNetwork, options)
 end
 
 -- ============================================
+-- Phase 3: デコイシステム
+-- ============================================
+
+--[[
+    デコイシステムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - autoActivate: SAM停波時に自動送波
+        - attractionRadius: ARM誘引半径（メートル）
+        - attractionProbability: ARM誘引確率
+    @return SAM_DECOY インスタンス
+]]
+function createDecoySystem(iadsNetwork, options)
+    options = options or {}
+
+    local decoy = SAM_DECOY.new(iadsNetwork)
+    decoy:init(options)
+
+    IADS_SYSTEMS.decoy = decoy
+
+    SAM_UTILS.debug("[Main] Decoy system created")
+    return decoy
+end
+
+--[[
+    IADSネットワーク内の全SAMにデコイを自動配置
+    @param iads IADSネットワーク
+    @param decoySystem デコイシステム（nilならグローバル使用）
+    @param options テーブル
+        - count: SAMあたりのデコイ数
+        - radius: 配置半径
+    @return 配置されたデコイ数
+]]
+function deployDecoysAroundAllSams(iads, decoySystem, options)
+    decoySystem = decoySystem or IADS_SYSTEMS.decoy
+    if not iads or not decoySystem then return 0 end
+
+    options = options or {}
+    local count = options.count or 2
+    local radius = options.radius or 3000
+
+    local totalDeployed = 0
+    for samGroupName, _ in pairs(iads.samSites) do
+        local deployed = decoySystem:deployAroundSam(samGroupName, count, radius, options)
+        totalDeployed = totalDeployed + #deployed
+    end
+
+    SAM_UTILS.debug("[Main] Deployed " .. totalDeployed .. " decoys around SAM sites")
+    return totalDeployed
+end
+
+-- ============================================
+-- Phase 3: ジャマー対策システム
+-- ============================================
+
+--[[
+    ジャマー対策システムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - updateInterval: 更新間隔（秒）
+    @return SAM_ANTI_JAM インスタンス
+]]
+function createAntiJamSystem(iadsNetwork, options)
+    options = options or {}
+
+    local antiJam = SAM_ANTI_JAM.new(iadsNetwork)
+    antiJam:init(options)
+
+    IADS_SYSTEMS.antiJam = antiJam
+
+    SAM_UTILS.debug("[Main] Anti-Jam system created")
+    return antiJam
+end
+
+-- ============================================
+-- Phase 3: 修復/再配置システム
+-- ============================================
+
+--[[
+    修復/再配置システムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - maxRepairTeams: 最大同時修復チーム数
+        - shootAndScoot: シュート＆スクート設定
+        - spareUnits: スペアユニット数
+    @return SAM_MAINTENANCE インスタンス
+]]
+function createMaintenanceSystem(iadsNetwork, options)
+    options = options or {}
+
+    local maintenance = SAM_MAINTENANCE.new(iadsNetwork)
+    maintenance:init(options)
+
+    IADS_SYSTEMS.maintenance = maintenance
+
+    SAM_UTILS.debug("[Main] Maintenance system created")
+    return maintenance
+end
+
+-- ============================================
 -- Phase 2統合: 高度なIADSセットアップ
 -- ============================================
 
@@ -628,6 +731,89 @@ function setupAdvancedIADS(name, options)
     return systems
 end
 
+-- ============================================
+-- Phase 3統合: カウンターメジャー付きIADSセットアップ
+-- ============================================
+
+--[[
+    Phase 1+2+3の全システムを一括でセットアップ
+    @param name IADSネットワーク名
+    @param options テーブル
+        -- Phase 1 オプション
+        - debug: デバッグモード
+        - samPattern: SAMグループ名パターン
+        - ewrPattern: EWRグループ名パターン
+        - coalition: 陣営フィルタ
+        - linkDistance: 自動リンク距離
+        - emconLevel: 初期EMCONレベル
+        - emconMode: EMCON運用モード
+        - reloadEnabled: 再装填シミュレーション
+        -- Phase 2 オプション
+        - pointDefense: ポイントディフェンス有効 (boolean)
+        - datalink: データリンク有効 (boolean)
+        - predictor: 航路予測有効 (boolean)
+        - silentLaunch: サイレントローンチ有効 (boolean)
+        - hvTargets: 高価値目標のリスト (テーブル配列)
+        -- Phase 3 オプション
+        - decoy: デコイシステム有効 (boolean)
+        - antiJam: ジャマー対策有効 (boolean)
+        - maintenance: 修復/再配置有効 (boolean)
+        - shootAndScoot: シュート＆スクート設定
+        - decoyCount: SAMあたりのデコイ数
+        - decoyRadius: デコイ配置半径
+    @return テーブル {iads, ammo, emcon, logger, sead, pointDefense, datalink, predictor, decoy, antiJam, maintenance}
+]]
+function setupFullCountermeasuresIADS(name, options)
+    options = options or {}
+
+    -- Phase 1+2 セットアップを実行
+    local systems = setupAdvancedIADS(name, options)
+
+    local iads = systems.iads
+
+    -- Phase 3: デコイシステム
+    if options.decoy ~= false then
+        local decoy = createDecoySystem(iads, {
+            autoActivate = options.decoyAutoActivate ~= false,
+            attractionRadius = options.decoyAttractionRadius or 5000,
+            attractionProbability = options.decoyProbability or 0.7
+        })
+        systems.decoy = decoy
+
+        -- 全SAMにデコイを配置
+        deployDecoysAroundAllSams(iads, decoy, {
+            count = options.decoyCount or 2,
+            radius = options.decoyRadius or 3000
+        })
+    end
+
+    -- Phase 3: ジャマー対策
+    if options.antiJam ~= false then
+        local antiJam = createAntiJamSystem(iads, {
+            updateInterval = options.antiJamUpdateInterval or 3
+        })
+        systems.antiJam = antiJam
+    end
+
+    -- Phase 3: 修復/再配置
+    if options.maintenance ~= false then
+        local maintenance = createMaintenanceSystem(iads, {
+            maxRepairTeams = options.maxRepairTeams or 3,
+            shootAndScoot = options.shootAndScoot or {
+                enabled = false,
+                shotsBeforeMove = 2,
+                moveDistance = 3000
+            },
+            spareUnits = options.spareUnits
+        })
+        systems.maintenance = maintenance
+    end
+
+    SAM_UTILS.debug("[Main] Full Countermeasures IADS setup completed")
+
+    return systems
+end
+
 --[[
     全システムの詳細ステータスを表示
 ]]
@@ -648,6 +834,21 @@ function printAdvancedStatus()
     -- 航路予測
     if IADS_SYSTEMS.predictor then
         IADS_SYSTEMS.predictor:printStatus()
+    end
+
+    -- デコイ
+    if IADS_SYSTEMS.decoy then
+        IADS_SYSTEMS.decoy:printStatus()
+    end
+
+    -- ジャマー対策
+    if IADS_SYSTEMS.antiJam then
+        IADS_SYSTEMS.antiJam:printStatus()
+    end
+
+    -- 修復/再配置
+    if IADS_SYSTEMS.maintenance then
+        IADS_SYSTEMS.maintenance:printStatus()
     end
 end
 

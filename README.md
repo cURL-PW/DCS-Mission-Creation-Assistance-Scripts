@@ -14,6 +14,12 @@ DCS Worldミッション作成支援スクリプト集
 - **弾薬管理**: ランチャーごとの残弾追跡と自動停波
 - **動的レーダー運用(EMCON)**: 点滅モードやスケジュール運用
 - **統計・ログ**: 交戦記録と効率統計
+- **ポイントディフェンス**: 高価値目標の多層防護
+- **データリンク**: EWR→SAM間のトラック共有とサイレントローンチ
+- **航路予測**: 脅威の航路を予測し、SAMを事前アクティブ化
+- **デコイ/おとり**: ARM誘引用の偽レーダー送信機
+- **ジャマー対策**: ECCMとホームオンジャム
+- **修復/再配置**: 損傷SAMの修復とシュート＆スクート
 
 ## ディレクトリ構造
 
@@ -35,7 +41,11 @@ DCS-Mission-Creation-Assistance-Scripts/
 │   ├── threat.lua        # 脅威情報共有システム
 │   ├── point_defense.lua # ポイントディフェンス (Phase 2)
 │   ├── datalink.lua      # データリンク (Phase 2)
-│   └── predictor.lua     # 航路予測 (Phase 2)
+│   ├── predictor.lua     # 航路予測 (Phase 2)
+│   └── maintenance.lua   # 修復/再配置 (Phase 3)
+├── countermeasures/
+│   ├── decoy.lua         # デコイ/おとり (Phase 3)
+│   └── anti_jam.lua      # ジャマー対策 (Phase 3)
 └── misc/
     └── addSamlist.lua    # SAMユニット列挙ユーティリティ
 ```
@@ -316,6 +326,61 @@ local sector = createSectorWithSams(iads, "Sector_North",
 | `createPredictorSystem(network, options)` | 航路予測を作成 |
 | `printAdvancedStatus()` | 全システムの詳細ステータスを表示 |
 
+### SAM_DECOY (Phase 3)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | デコイシステムを作成 |
+| `init(options)` | 初期化 |
+| `addDecoy(position, options)` | デコイを追加 |
+| `deployAroundSam(samName, count, radius)` | SAM周辺にデコイを配置 |
+| `activateDecoy(decoyId)` | デコイを送波開始 |
+| `deactivateDecoy(decoyId)` | デコイを停波 |
+| `activateAll()` | 全デコイを送波 |
+| `deactivateAll()` | 全デコイを停波 |
+| `checkArmAttraction(armPosition)` | ARM誘引チェック |
+| `printStatus()` | ステータス表示 |
+
+### SAM_ANTI_JAM (Phase 3)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | ジャマー対策システムを作成 |
+| `init(options)` | 初期化 |
+| `detectJammer(position, options)` | ジャマーを検出登録 |
+| `calculateJamEffect(samName)` | SAMへのジャミング効果を計算 |
+| `setEccmMode(samName, mode)` | ECCMモードを設定 |
+| `autoSelectEccm(samName)` | 自動ECCM選択 |
+| `processHomeOnJam(samName)` | ホームオンジャム処理 |
+| `triangulateJammer(jammerId)` | 三角測量でジャマー位置特定 |
+| `getJammedPerformance(samName)` | ジャミング下での性能を取得 |
+| `printStatus()` | ステータス表示 |
+
+### SAM_MAINTENANCE (Phase 3)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | 修復/再配置システムを作成 |
+| `init(options)` | 初期化 |
+| `applyDamage(samName, percent)` | SAMにダメージを適用 |
+| `queueRepair(samName)` | 修復キューに追加 |
+| `dispatchRepairTeam(samName)` | 修復チームを派遣 |
+| `startRelocation(samName, targetPos)` | 再配置を開始 |
+| `recordShot(samName)` | 発射をカウント（シュート＆スクート） |
+| `useSpareUnit(unitType)` | スペアユニットを使用 |
+| `addSpareUnits(unitType, count)` | スペアユニットを追加 |
+| `printStatus()` | ステータス表示 |
+
+### Phase 3 統合関数
+
+| 関数 | 説明 |
+|------|------|
+| `setupFullCountermeasuresIADS(name, options)` | Phase 1+2+3全システムを一括セットアップ |
+| `createDecoySystem(network, options)` | デコイシステムを作成 |
+| `createAntiJamSystem(network, options)` | ジャマー対策システムを作成 |
+| `createMaintenanceSystem(network, options)` | 修復/再配置システムを作成 |
+| `deployDecoysAroundAllSams(iads, decoy, options)` | 全SAMにデコイを配置 |
+
 ## Phase 2 使用例
 
 ### ポイントディフェンス
@@ -395,6 +460,191 @@ local systems = setupAdvancedIADS("Red IADS", {
 })
 ```
 
+## Phase 3 使用例
+
+### デコイ/おとりシステム
+
+ARMから本物のSAMを守るためのおとり送信機をシミュレートします。
+
+```lua
+local decoy = createDecoySystem(iads, {
+    autoActivate = true,           -- SAM停波時に自動送波
+    attractionRadius = 5000,       -- ARM誘引半径（メートル）
+    attractionProbability = 0.7    -- ARM誘引確率（70%）
+})
+
+-- SAMサイト周辺にデコイを配置
+decoy:deployAroundSam("SA-10_Battery_1", 3, 3000)  -- 3基、半径3km
+
+-- 全SAMに自動配置
+deployDecoysAroundAllSams(iads, decoy, {
+    count = 2,      -- SAMあたり2基
+    radius = 3000   -- 3km半径
+})
+
+-- 手動でデコイを追加
+decoy:addDecoy({x = 100000, y = 0, z = 200000}, {
+    type = SAM_DECOY.TYPE.ELECTRONIC,
+    linkedSam = "SA-10_Battery_1"
+})
+
+-- ステータス表示
+decoy:printStatus()
+```
+
+**デコイタイプ:**
+| タイプ | 説明 |
+|--------|------|
+| FIXED | 固定設置型 |
+| MOBILE | 移動式 |
+| INFLATABLE | 膨張式（安価） |
+| ELECTRONIC | 電子式（送信機のみ） |
+
+**デコイ状態:**
+| 状態 | 説明 |
+|------|------|
+| STANDBY | 待機中 |
+| EMITTING | 送波中 |
+| ATTRACTING | ARM誘引中 |
+| DESTROYED | 破壊済み |
+
+### ジャマー対策システム
+
+ECMジャマーに対するSAMの対抗措置をシミュレートします。
+
+```lua
+local antiJam = createAntiJamSystem(iads, {
+    updateInterval = 3   -- 3秒ごとに更新
+})
+
+-- ジャマーを検出登録
+antiJam:detectJammer({x = 150000, y = 5000, z = 250000}, {
+    type = SAM_ANTI_JAM.JAMMER_TYPE.DRFM,
+    power = 100,
+    effectiveRange = 80000
+})
+
+-- SAMのECCMモードを手動設定
+antiJam:setEccmMode("SA-10_Battery_1", SAM_ANTI_JAM.ECCM_MODE.FREQ_HOP)
+
+-- ホームオンジャム処理
+local hojTarget = antiJam:processHomeOnJam("SA-10_Battery_1")
+if hojTarget then
+    -- ジャマー位置に向けてミサイル発射可能
+end
+
+-- 三角測量でジャマー位置を特定
+local location = antiJam:triangulateJammer("JAM-001")
+
+-- ステータス表示
+antiJam:printStatus()
+```
+
+**ジャマータイプ:**
+| タイプ | 説明 |
+|--------|------|
+| NOISE | ノイズジャミング |
+| DECEPTIVE | 欺瞞ジャミング |
+| DRFM | デジタルRF記憶ジャミング |
+| BARRAGE | バラージジャミング |
+| SPOT | スポットジャミング |
+
+**ECCMモード:**
+| モード | 説明 | 能力必要 |
+|--------|------|----------|
+| PASSIVE | パッシブモード（停波） | なし |
+| FREQ_HOP | 周波数ホッピング | freqHop |
+| BURN_THROUGH | バーンスルー（高出力） | burnThrough |
+| HOJ | ホームオンジャム | hoj |
+| TRIANGULATION | 三角測量 | triangulation |
+
+### 修復/再配置システム
+
+損傷SAMの修復と戦術的再配置（シュート＆スクート）をシミュレートします。
+
+```lua
+local maintenance = createMaintenanceSystem(iads, {
+    maxRepairTeams = 3,    -- 最大同時修復チーム数
+    shootAndScoot = {
+        enabled = true,
+        shotsBeforeMove = 2,    -- 2発発射後に移動
+        moveDistance = 3000,    -- 3km移動
+        cooldownTime = 600      -- 再配置後のクールダウン
+    },
+    spareUnits = {
+        launchers = 10,
+        radars = 5,
+        commandPosts = 2,
+        powerUnits = 5
+    }
+})
+
+-- ダメージを適用（自動で修復キューに入る）
+maintenance:applyDamage("SA-10_Battery_1", 40)  -- 40%ダメージ
+
+-- 手動で再配置を開始
+maintenance:startRelocation("SA-11_Battery_1", {
+    x = 110000, y = 0, z = 220000
+})
+
+-- 発射をカウント（シュート＆スクート用）
+maintenance:recordShot("SA-11_Battery_1")
+
+-- ステータス表示
+maintenance:printStatus()
+```
+
+**損傷レベル:**
+| レベル | HP | 動作 |
+|--------|-----|------|
+| NONE | 90-100% | 通常運用 |
+| LIGHT | 60-89% | 修復キュー |
+| MODERATE | 30-59% | 修復キュー |
+| HEAVY | 1-29% | 修復キュー |
+| DESTROYED | 0% | 修復不可 |
+
+**再配置状態:**
+| 状態 | 説明 |
+|------|------|
+| STATIC | 静止中 |
+| PACKING | 撤収中 |
+| MOVING | 移動中 |
+| DEPLOYING | 展開中 |
+| READY | 展開完了 |
+
+### カウンターメジャー付きIADS一括セットアップ
+
+```lua
+local systems = setupFullCountermeasuresIADS("Red IADS", {
+    -- Phase 1
+    samPattern = "SAM_",
+    ewrPattern = "EWR_",
+    linkDistance = 150000,
+    emconMode = SAM_EMCON.MODE.BLINK,
+
+    -- Phase 2
+    pointDefense = true,
+    datalink = true,
+    predictor = true,
+    silentLaunch = true,
+    hvTargets = {
+        {type = "airbase", name = "Kutaisi", options = {priority = 1}}
+    },
+
+    -- Phase 3
+    decoy = true,
+    antiJam = true,
+    maintenance = true,
+    decoyCount = 2,
+    decoyRadius = 3000,
+    shootAndScoot = {
+        enabled = true,
+        shotsBeforeMove = 2,
+        moveDistance = 3000
+    }
+})
+```
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -407,10 +657,10 @@ local systems = setupAdvancedIADS("Red IADS", {
 - ✅ データリンクシミュレーション
 - ✅ 航路予測システム
 
-### Phase 3 (予定)
-- デコイ/おとりシステム
-- ジャマー対策
-- 修復/再配置システム
+### Phase 3 (完了)
+- ✅ デコイ/おとりシステム
+- ✅ ジャマー対策（ECCM、HOJ、三角測量）
+- ✅ 修復/再配置システム（シュート＆スクート）
 
 ### Phase 4 (予定)
 - AIコマンダー
