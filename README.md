@@ -22,6 +22,8 @@ DCS Worldミッション作成支援スクリプト集
 - **修復/再配置**: 損傷SAMの修復とシュート＆スクート
 - **AIコマンダー**: 脅威に応じた自動IADS管理
 - **F10マップ連携**: マップ上のステータス表示とラジオメニュー制御
+- **マルチプレイヤー同期**: クライアント間IADS状態同期
+- **陣営別フィルタ**: Red/Blue別の情報アクセス制御
 
 ## ディレクトリ構造
 
@@ -52,6 +54,9 @@ DCS-Mission-Creation-Assistance-Scripts/
 │   └── commander.lua     # AIコマンダー (Phase 4)
 ├── ui/
 │   └── f10_map.lua       # F10マップ連携 (Phase 4)
+├── multiplayer/
+│   ├── sync.lua          # マルチプレイヤー同期 (Phase 5)
+│   └── coalition.lua     # 陣営別フィルタ (Phase 5)
 └── misc/
     └── addSamlist.lua    # SAMユニット列挙ユーティリティ
 ```
@@ -426,6 +431,46 @@ local sector = createSectorWithSams(iads, "Sector_North",
 | `setupCompleteIADS(name, options)` | Phase 1+2+3+4全システムを一括セットアップ |
 | `createCommanderSystem(network, options)` | AIコマンダーを作成 |
 | `createF10MapSystem(network, options)` | F10マップシステムを作成 |
+
+### IADS_MP_SYNC (Phase 5)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | マルチプレイヤー同期システムを作成 |
+| `init(options)` | 初期化 |
+| `serializeState()` | 現在の状態をシリアライズ |
+| `applyState(state)` | 状態を適用（クライアント） |
+| `sendMessage(type, data, target)` | メッセージを送信 |
+| `sendFullState(client)` | 完全状態を送信（ホスト） |
+| `sendDelta()` | 差分を送信（ホスト） |
+| `requestSync()` | 同期リクエスト（クライアント） |
+| `sendCommand(cmd, params)` | コマンドを送信 |
+| `printStatus()` | ステータス表示 |
+
+### IADS_COALITION (Phase 5)
+
+| 関数 | 説明 |
+|------|------|
+| `new()` | 陣営フィルタを作成 |
+| `init(options)` | 初期化 |
+| `getPlayerCoalition(playerId)` | プレイヤー陣営を取得 |
+| `getPlayerAccessLevel(playerId)` | アクセスレベルを取得 |
+| `canAccess(playerId, infoType, coalition)` | アクセス権限チェック |
+| `setPlayerPermission(playerId, level)` | 権限を設定 |
+| `addGameMaster(playerId)` | ゲームマスターを追加 |
+| `getFilteredSamInfo(playerId, network)` | フィルタ済みSAM情報取得 |
+| `createCoalitionRadioMenus(side)` | 陣営別メニュー作成 |
+| `sendCoalitionMessage(side, msg)` | 陣営別メッセージ送信 |
+| `printStatus()` | ステータス表示 |
+
+### Phase 5 統合関数
+
+| 関数 | 説明 |
+|------|------|
+| `setupMultiplayerIADS(name, options)` | Phase 1-5全システムを一括セットアップ |
+| `setupDualCoalitionIADS(options)` | Red/Blue両陣営を同時セットアップ |
+| `createMPSyncSystem(network, options)` | マルチプレイヤー同期を作成 |
+| `createCoalitionFilter(options)` | 陣営フィルタを作成 |
 
 ## Phase 2 使用例
 
@@ -812,6 +857,117 @@ local systems = setupCompleteIADS("Red IADS", {
 })
 ```
 
+## Phase 5 使用例
+
+### マルチプレイヤー同期
+
+クライアント間でIADS状態を同期します。
+
+```lua
+local mpSync = createMPSyncSystem(iads, {
+    updateInterval = 1,        -- 1秒ごとに差分同期
+    fullSyncInterval = 30      -- 30秒ごとに完全同期
+})
+
+-- 同期モードを確認
+local status = mpSync:getStatus()
+print("Mode: " .. status.mode)  -- HOST/CLIENT/STANDALONE
+
+-- リモートコマンド送信（クライアント→ホスト）
+mpSync:sendCommand("ACTIVATE_SAM", {samName = "SA-10_Battery_1"})
+mpSync:sendCommand("SET_DEFCON", {level = "HIGH"})
+
+-- ステータス表示
+mpSync:printStatus()
+```
+
+**同期モード:**
+| モード | 説明 |
+|--------|------|
+| HOST | ホスト（権威サーバー、状態を配信） |
+| CLIENT | クライアント（状態を受信） |
+| STANDALONE | シングルプレイヤー |
+
+### 陣営別情報フィルタ
+
+プレイヤーの陣営に応じて情報アクセスを制御します。
+
+```lua
+local coalitionFilter = createCoalitionFilter({
+    redNetwork = redIADS,
+    blueNetwork = blueIADS,
+    gameMasterEnabled = true
+})
+
+-- ゲームマスターを追加
+coalitionFilter:addGameMaster(playerId)
+
+-- プレイヤー権限を設定
+coalitionFilter:setPlayerPermission(playerId, IADS_COALITION.ACCESS_LEVEL.ELEVATED)
+
+-- 陣営別ラジオメニューを作成
+coalitionFilter:createCoalitionRadioMenus(IADS_COALITION.SIDE.RED)
+coalitionFilter:createCoalitionRadioMenus(IADS_COALITION.SIDE.BLUE)
+
+-- フィルタリングされたSAM情報を取得
+local samInfo = coalitionFilter:getFilteredSamInfo(playerId, targetNetwork)
+```
+
+**アクセスレベル:**
+| レベル | 説明 |
+|--------|------|
+| NONE | アクセス不可 |
+| BASIC | 基本情報のみ |
+| STANDARD | 自軍詳細、敵は検出分のみ |
+| ELEVATED | 詳細な敵情報 |
+| FULL | ゲームマスター（全情報） |
+| ADMIN | 管理者（設定変更可能） |
+
+### マルチプレイヤーIADS一括セットアップ
+
+```lua
+local systems = setupMultiplayerIADS("Red IADS", {
+    -- Phase 1-4 オプション（省略）
+    samPattern = "SAM_",
+    ewrPattern = "EWR_",
+
+    -- Phase 5
+    multiplayer = true,
+    coalitionFilter = true,
+    gameMaster = true,
+    mpSyncInterval = 1
+})
+```
+
+### 両陣営対称セットアップ
+
+Red/Blue両方のIADSを同時にセットアップします。
+
+```lua
+local dualSystems = setupDualCoalitionIADS({
+    sharedOptions = {
+        linkDistance = 150000,
+        emconMode = SAM_EMCON.MODE.BLINK,
+        commander = true,
+        f10Map = true
+    },
+    redOptions = {
+        samPattern = "RED_SAM_",
+        ewrPattern = "RED_EWR_"
+    },
+    blueOptions = {
+        samPattern = "BLUE_SAM_",
+        ewrPattern = "BLUE_EWR_"
+    },
+    multiplayer = true,
+    gameMaster = true
+})
+
+-- 各陣営のシステムにアクセス
+local redIADS = dualSystems.red.iads
+local blueIADS = dualSystems.blue.iads
+```
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -833,8 +989,9 @@ local systems = setupCompleteIADS("Red IADS", {
 - ✅ AIコマンダー（自動IADS管理、戦術モード）
 - ✅ F10マップ連携（ステータス表示、ラジオメニュー制御）
 
-### Phase 5 (予定)
-- マルチプレイヤー対応
+### Phase 5 (完了)
+- ✅ マルチプレイヤー同期（状態同期、ホスト/クライアント管理）
+- ✅ 陣営別情報フィルタ（Red/Blue別アクセス制御）
 
 ## ライセンス
 

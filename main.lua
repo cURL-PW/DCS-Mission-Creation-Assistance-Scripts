@@ -57,7 +57,7 @@
 -- ============================================
 -- バージョン情報
 -- ============================================
-DCS_SAM_VERSION = "2.4.0"
+DCS_SAM_VERSION = "2.5.0"
 DCS_SAM_AUTHOR = "DCS Mission Creation Scripts"
 
 -- ============================================
@@ -75,7 +75,9 @@ IADS_SYSTEMS = {
     antiJam = nil,       -- ジャマー対策 (Phase 3)
     maintenance = nil,   -- 修復/再配置 (Phase 3)
     commander = nil,     -- AIコマンダー (Phase 4)
-    f10Map = nil         -- F10マップ連携 (Phase 4)
+    f10Map = nil,        -- F10マップ連携 (Phase 4)
+    mpSync = nil,        -- マルチプレイヤー同期 (Phase 5)
+    coalition = nil      -- 陣営別フィルタ (Phase 5)
 }
 
 -- ============================================
@@ -862,6 +864,16 @@ function printAdvancedStatus()
     if IADS_SYSTEMS.f10Map then
         IADS_SYSTEMS.f10Map:printStatus()
     end
+
+    -- マルチプレイヤー同期
+    if IADS_SYSTEMS.mpSync then
+        IADS_SYSTEMS.mpSync:printStatus()
+    end
+
+    -- 陣営フィルタ
+    if IADS_SYSTEMS.coalition then
+        IADS_SYSTEMS.coalition:printStatus()
+    end
 end
 
 -- ============================================
@@ -962,6 +974,183 @@ function setupCompleteIADS(name, options)
     SAM_UTILS.debug("[Main] Complete IADS setup finished")
 
     return systems
+end
+
+-- ============================================
+-- Phase 5: マルチプレイヤー同期
+-- ============================================
+
+--[[
+    マルチプレイヤー同期システムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - updateInterval: 同期間隔（秒）
+        - fullSyncInterval: 完全同期間隔（秒）
+    @return IADS_MP_SYNC インスタンス
+]]
+function createMPSyncSystem(iadsNetwork, options)
+    options = options or {}
+
+    local mpSync = IADS_MP_SYNC.new(iadsNetwork)
+    mpSync:init(options)
+
+    IADS_SYSTEMS.mpSync = mpSync
+
+    SAM_UTILS.debug("[Main] Multiplayer Sync system created")
+    return mpSync
+end
+
+-- ============================================
+-- Phase 5: 陣営別フィルタ
+-- ============================================
+
+--[[
+    陣営別情報フィルタシステムを作成・初期化
+    @param options テーブル
+        - redNetwork: Red陣営のIADSネットワーク
+        - blueNetwork: Blue陣営のIADSネットワーク
+        - gameMasterEnabled: ゲームマスター有効
+        - spectatorAccess: 観戦者アクセスレベル
+    @return IADS_COALITION インスタンス
+]]
+function createCoalitionFilter(options)
+    options = options or {}
+
+    local coalitionFilter = IADS_COALITION.new()
+    coalitionFilter:init(options)
+
+    IADS_SYSTEMS.coalition = coalitionFilter
+
+    SAM_UTILS.debug("[Main] Coalition Filter system created")
+    return coalitionFilter
+end
+
+-- ============================================
+-- Phase 5統合: マルチプレイヤー対応IADSセットアップ
+-- ============================================
+
+--[[
+    Phase 1+2+3+4+5の全システムを一括でセットアップ（マルチプレイヤー対応）
+    @param name IADSネットワーク名
+    @param options テーブル
+        -- Phase 1-4 オプション
+        （setupCompleteIADSと同じ）
+        -- Phase 5 オプション
+        - multiplayer: マルチプレイヤー同期有効 (boolean)
+        - coalitionFilter: 陣営別フィルタ有効 (boolean)
+        - gameMaster: ゲームマスター有効 (boolean)
+    @return テーブル（全システム）
+]]
+function setupMultiplayerIADS(name, options)
+    options = options or {}
+
+    -- Phase 1+2+3+4 セットアップを実行
+    local systems = setupCompleteIADS(name, options)
+
+    local iads = systems.iads
+
+    -- Phase 5: マルチプレイヤー同期
+    if options.multiplayer ~= false then
+        local mpSync = createMPSyncSystem(iads, {
+            updateInterval = options.mpSyncInterval or 1,
+            fullSyncInterval = options.mpFullSyncInterval or 30
+        })
+        systems.mpSync = mpSync
+    end
+
+    -- Phase 5: 陣営別フィルタ
+    if options.coalitionFilter ~= false then
+        local coalition = options.coalition or coalition.side.RED
+        local coalitionNetwork = {}
+
+        if coalition == 1 then  -- RED
+            coalitionNetwork.redNetwork = iads
+        else  -- BLUE
+            coalitionNetwork.blueNetwork = iads
+        end
+
+        local filter = createCoalitionFilter({
+            redNetwork = coalitionNetwork.redNetwork,
+            blueNetwork = coalitionNetwork.blueNetwork,
+            gameMasterEnabled = options.gameMaster or false
+        })
+        systems.coalitionFilter = filter
+
+        -- 陣営別ラジオメニューを作成
+        if coalitionNetwork.redNetwork then
+            filter:createCoalitionRadioMenus(IADS_COALITION.SIDE.RED)
+        end
+        if coalitionNetwork.blueNetwork then
+            filter:createCoalitionRadioMenus(IADS_COALITION.SIDE.BLUE)
+        end
+    end
+
+    SAM_UTILS.debug("[Main] Multiplayer IADS setup finished")
+
+    return systems
+end
+
+--[[
+    Red/Blue両陣営のIADSを同時セットアップ（対称マルチプレイヤー）
+    @param options テーブル
+        - redOptions: Red陣営設定
+        - blueOptions: Blue陣営設定
+        - sharedOptions: 共通設定
+    @return テーブル {red, blue, coalition}
+]]
+function setupDualCoalitionIADS(options)
+    options = options or {}
+
+    local sharedOptions = options.sharedOptions or {}
+    local redOptions = options.redOptions or {}
+    local blueOptions = options.blueOptions or {}
+
+    -- 共通設定をマージ
+    for k, v in pairs(sharedOptions) do
+        if redOptions[k] == nil then redOptions[k] = v end
+        if blueOptions[k] == nil then blueOptions[k] = v end
+    end
+
+    -- Red IADS セットアップ
+    redOptions.coalition = 1
+    redOptions.coalitionFilter = false  -- 後で統合設定
+    redOptions.multiplayer = false
+    local redSystems = setupCompleteIADS("Red IADS", redOptions)
+
+    -- Blue IADS セットアップ
+    blueOptions.coalition = 2
+    blueOptions.coalitionFilter = false
+    blueOptions.multiplayer = false
+    local blueSystems = setupCompleteIADS("Blue IADS", blueOptions)
+
+    -- 統合陣営フィルタ
+    local coalitionFilter = createCoalitionFilter({
+        redNetwork = redSystems.iads,
+        blueNetwork = blueSystems.iads,
+        gameMasterEnabled = options.gameMaster or false
+    })
+
+    -- 陣営別ラジオメニュー
+    coalitionFilter:createCoalitionRadioMenus(IADS_COALITION.SIDE.RED)
+    coalitionFilter:createCoalitionRadioMenus(IADS_COALITION.SIDE.BLUE)
+
+    -- マルチプレイヤー同期（ホストのみ）
+    local mpSync = nil
+    if options.multiplayer ~= false then
+        -- Red側を基準に同期（または両方）
+        mpSync = createMPSyncSystem(redSystems.iads, {
+            updateInterval = sharedOptions.mpSyncInterval or 1
+        })
+    end
+
+    SAM_UTILS.debug("[Main] Dual Coalition IADS setup finished")
+
+    return {
+        red = redSystems,
+        blue = blueSystems,
+        coalition = coalitionFilter,
+        mpSync = mpSync
+    }
 end
 
 -- ============================================
