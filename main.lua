@@ -57,8 +57,18 @@
 -- ============================================
 -- バージョン情報
 -- ============================================
-DCS_SAM_VERSION = "2.0.0"
+DCS_SAM_VERSION = "2.1.0"
 DCS_SAM_AUTHOR = "DCS Mission Creation Scripts"
+
+-- ============================================
+-- 統合システムインスタンス格納
+-- ============================================
+IADS_SYSTEMS = {
+    networks = {},    -- IADSネットワーク
+    ammo = nil,       -- 弾薬管理システム
+    emcon = nil,      -- EMCONシステム
+    logger = nil      -- ロガー
+}
 
 -- ============================================
 -- 簡易初期化関数
@@ -228,6 +238,239 @@ function createSectorWithSams(iads, sectorId, center, radius)
     SAM_UTILS.debug("[Main] Sector '" .. sectorId .. "' created with SAMs")
 
     return sector
+end
+
+-- ============================================
+-- Phase 1: 弾薬管理システム
+-- ============================================
+
+--[[
+    弾薬管理システムを作成・初期化
+    @param options テーブル
+        - reloadEnabled: 再装填シミュレーション有効化
+        - reloadTime: 再装填時間（秒）
+        - autoGoGreen: 弾切れ時自動ダーク化
+        - iadsNetwork: IADSネットワーク参照
+    @return SAM_AMMO インスタンス
+]]
+function createAmmoSystem(options)
+    options = options or {}
+
+    local ammo = SAM_AMMO.new()
+    ammo:init(options)
+
+    IADS_SYSTEMS.ammo = ammo
+
+    SAM_UTILS.debug("[Main] Ammo system created")
+    return ammo
+end
+
+--[[
+    IADSネットワーク内の全SAMランチャーを弾薬管理に登録
+    @param iads IADSネットワーク
+    @param ammoSystem 弾薬管理システム（nilならグローバル使用）
+    @return 登録されたランチャー数
+]]
+function registerAllLaunchers(iads, ammoSystem)
+    ammoSystem = ammoSystem or IADS_SYSTEMS.ammo
+    if not iads or not ammoSystem then return 0 end
+
+    local count = 0
+    for groupName, samSite in pairs(iads.samSites) do
+        count = count + ammoSystem:registerGroup(samSite.group)
+    end
+
+    SAM_UTILS.debug("[Main] Registered " .. count .. " launchers to ammo system")
+    return count
+end
+
+-- ============================================
+-- Phase 1: EMCONシステム
+-- ============================================
+
+--[[
+    EMCONシステムを作成・初期化
+    @param options テーブル
+        - level: 初期EMCONレベル
+        - mode: 運用モード
+        - iadsNetwork: IADSネットワーク参照
+        - blinkProfile: 点滅プロファイル
+    @return SAM_EMCON インスタンス
+]]
+function createEmconSystem(options)
+    options = options or {}
+
+    local emcon = SAM_EMCON.new()
+    emcon:init(options)
+
+    IADS_SYSTEMS.emcon = emcon
+
+    SAM_UTILS.debug("[Main] EMCON system created")
+    return emcon
+end
+
+--[[
+    IADSネットワーク内の全SAMをEMCONに登録
+    @param iads IADSネットワーク
+    @param emconSystem EMCONシステム（nilならグローバル使用）
+    @return 登録されたSAM数
+]]
+function registerAllSamsToEmcon(iads, emconSystem)
+    emconSystem = emconSystem or IADS_SYSTEMS.emcon
+    if not iads or not emconSystem then return 0 end
+
+    local count = 0
+    for groupName, _ in pairs(iads.samSites) do
+        emconSystem:registerSam(groupName)
+        count = count + 1
+    end
+
+    SAM_UTILS.debug("[Main] Registered " .. count .. " SAMs to EMCON system")
+    return count
+end
+
+-- ============================================
+-- Phase 1: ロガーシステム
+-- ============================================
+
+--[[
+    ロガーシステムを作成・初期化
+    @param options テーブル
+        - minLogLevel: 最小ログレベル
+        - maxLogEntries: 最大ログ保持数
+        - iadsNetwork: IADSネットワーク参照
+    @return SAM_LOGGER インスタンス
+]]
+function createLoggerSystem(options)
+    options = options or {}
+
+    local logger = SAM_LOGGER.new()
+    logger:init(options)
+
+    IADS_SYSTEMS.logger = logger
+
+    SAM_UTILS.debug("[Main] Logger system created")
+    return logger
+end
+
+-- ============================================
+-- 統合セットアップ
+-- ============================================
+
+--[[
+    全システムを一括でセットアップ
+    @param name IADSネットワーク名
+    @param options テーブル
+        - debug: デバッグモード
+        - samPattern: SAMグループ名パターン
+        - ewrPattern: EWRグループ名パターン
+        - coalition: 陣営フィルタ
+        - linkDistance: 自動リンク距離
+        - emconLevel: 初期EMCONレベル
+        - emconMode: EMCON運用モード
+        - reloadEnabled: 再装填シミュレーション
+    @return テーブル {iads, ammo, emcon, logger, sead}
+]]
+function setupFullIADS(name, options)
+    options = options or {}
+
+    if options.debug then
+        SAM_UTILS.DEBUG = true
+    end
+
+    SAM_UTILS.debug("[Main] Setting up full IADS: " .. (name or "default"))
+
+    -- 1. IADSネットワーク作成
+    local iads = IADS_NETWORK.new(name)
+    iads:init({updateInterval = options.updateInterval or 5})
+    IADS_SYSTEMS.networks[name] = iads
+
+    -- 2. SAMとEWRを自動追加
+    if options.samPattern then
+        autoAddSamSites(iads, options.samPattern, options.coalition)
+    end
+    if options.ewrPattern then
+        autoAddEWRs(iads, options.ewrPattern, options.coalition)
+    end
+
+    -- 3. 自動リンク
+    if options.linkDistance then
+        autoLinkByDistance(iads, options.linkDistance)
+    end
+
+    -- 4. 弾薬管理システム
+    local ammo = createAmmoSystem({
+        iadsNetwork = iads,
+        reloadEnabled = options.reloadEnabled or false,
+        reloadTime = options.reloadTime or 300
+    })
+    registerAllLaunchers(iads, ammo)
+
+    -- 5. EMCONシステム
+    local emcon = createEmconSystem({
+        iadsNetwork = iads,
+        level = options.emconLevel or SAM_EMCON.LEVEL.DELTA,
+        mode = options.emconMode or SAM_EMCON.MODE.STATIC
+    })
+    registerAllSamsToEmcon(iads, emcon)
+
+    -- 6. ロガー
+    local logger = createLoggerSystem({
+        iadsNetwork = iads
+    })
+
+    -- 7. SEADシステム連携
+    SEAD_SYSTEM.init({
+        debug = options.debug,
+        iadsNetwork = iads
+    })
+
+    SAM_UTILS.debug("[Main] Full IADS setup completed")
+
+    return {
+        iads = iads,
+        ammo = ammo,
+        emcon = emcon,
+        logger = logger,
+        sead = SEAD_SYSTEM
+    }
+end
+
+--[[
+    統合ステータス表示
+    表示内容: IADS、弾薬、EMCON、統計
+]]
+function printFullStatus()
+    -- IADSステータス
+    for name, iads in pairs(IADS_SYSTEMS.networks) do
+        iads:printStatus()
+    end
+
+    -- 弾薬ステータス
+    if IADS_SYSTEMS.ammo then
+        IADS_SYSTEMS.ammo:printStatus()
+    end
+
+    -- EMCONステータス
+    if IADS_SYSTEMS.emcon then
+        IADS_SYSTEMS.emcon:printStatus()
+    end
+
+    -- 統計
+    if IADS_SYSTEMS.logger then
+        IADS_SYSTEMS.logger:printStatistics()
+    end
+end
+
+--[[
+    ミッションレポート生成・表示
+]]
+function printMissionReport()
+    if IADS_SYSTEMS.logger then
+        IADS_SYSTEMS.logger:printReport()
+    else
+        SAM_UTILS.info("[Report] Logger not initialized")
+    end
 end
 
 -- ============================================

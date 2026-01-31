@@ -11,6 +11,9 @@ DCS Worldミッション作成支援スクリプト集
 
 - **SEADシミュレーション**: 対レーダーミサイル発射時のSAMレーダー停波シミュレーション
 - **統合防空システム(IADS)ネットワーク**: SAM同士を連携させた協調防空システム
+- **弾薬管理**: ランチャーごとの残弾追跡と自動停波
+- **動的レーダー運用(EMCON)**: 点滅モードやスケジュール運用
+- **統計・ログ**: 交戦記録と効率統計
 
 ## ディレクトリ構造
 
@@ -22,7 +25,10 @@ DCS-Mission-Creation-Assistance-Scripts/
 ├── core/
 │   ├── config.lua        # SAM設定データ
 │   ├── utils.lua         # 共通ユーティリティ
-│   └── sead.lua          # SEADシミュレーションシステム
+│   ├── sead.lua          # SEADシミュレーションシステム
+│   ├── ammo.lua          # 弾薬管理システム
+│   ├── emcon.lua         # EMCONシステム
+│   └── logger.lua        # 統計・ログシステム
 ├── iads/
 │   ├── network.lua       # IADSネットワーク管理
 │   ├── sector.lua        # 防空セクター管理
@@ -31,32 +37,37 @@ DCS-Mission-Creation-Assistance-Scripts/
     └── addSamlist.lua    # SAMユニット列挙ユーティリティ
 ```
 
-## インストール
+## クイックスタート
 
-1. MISTをミッションにロードする
-2. 必要なスクリプトファイルをロードする
-
-### SEADシステムのみ使用する場合
+### 全機能を一括セットアップ
 
 ```lua
+-- 全スクリプトをロード
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/config.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/utils.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/sead.lua")
-
--- SEADシステムを初期化
-SEAD_SYSTEM.init({debug = false})
-```
-
-### IADSネットワークを使用する場合
-
-```lua
-dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/config.lua")
-dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/utils.lua")
-dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/sead.lua")
+dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/ammo.lua")
+dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/emcon.lua")
+dofile(lfs.writedir() .. "Scripts/DCS-SAM/core/logger.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/iads/network.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/iads/sector.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/iads/threat.lua")
 dofile(lfs.writedir() .. "Scripts/DCS-SAM/main.lua")
+
+-- 一括セットアップ
+local systems = setupFullIADS("Red IADS", {
+    debug = true,
+    samPattern = "SAM_",        -- "SAM_"を含むグループを自動追加
+    ewrPattern = "EWR_",        -- "EWR_"を含むグループを自動追加
+    coalition = coalition.side.RED,
+    linkDistance = 150000,      -- 150km以内を自動リンク
+    emconLevel = SAM_EMCON.LEVEL.DELTA,
+    emconMode = SAM_EMCON.MODE.BLINK,
+    reloadEnabled = true
+})
+
+-- 全SAMをアクティブ化
+systems.iads:activateAllSams()
 ```
 
 ## 使用方法
@@ -66,16 +77,10 @@ dofile(lfs.writedir() .. "Scripts/DCS-SAM/main.lua")
 対レーダーミサイル（HARM, LD-10等）が発射された際、SAMのレーダーを一定時間停波させます。
 
 ```lua
--- 基本的な初期化
 SEAD_SYSTEM.init({debug = true})
 ```
 
-**対応ミサイル:**
-- KH-58
-- KH-25MPU
-- AGM-88 HARM
-- LD-10
-- ALARM
+**対応ミサイル:** KH-58, KH-25MPU, AGM-88 HARM, LD-10, ALARM
 
 **対応SAMシステム:**
 - ソ連/ロシア: S-125, S-75, SA-6 Kub, SA-8 Osa, S-300PS, SA-11 Buk, Tor
@@ -84,152 +89,212 @@ SEAD_SYSTEM.init({debug = true})
 
 ### 2. 統合防空システム(IADS)ネットワーク
 
-SAM同士を連携させ、協調した防空を実現します。
-
 ```lua
--- IADSネットワークを作成
 local redIADS = IADS_NETWORK.new("Red Force IADS")
 redIADS:init({updateInterval = 5})
 
--- SAMサイトを追加
+-- SAMとEWRを追加・リンク
 redIADS:addSamSite(Group.getByName("SA-10_Battery_1"))
-redIADS:addSamSite(Group.getByName("SA-6_Battery_1"))
-redIADS:addSamSite(Group.getByName("SA-11_Battery_1"))
-
--- 早期警戒レーダー(EWR)を追加
 redIADS:addEWR(Group.getByName("EWR_South"))
-
--- SAMとEWRをリンク
 redIADS:linkSamToEWR("SA-10_Battery_1", "EWR_South")
-redIADS:linkSamToEWR("SA-6_Battery_1", "EWR_South")
 
--- SAM同士をリンク（相互支援）
-redIADS:linkSamToSam("SA-10_Battery_1", "SA-6_Battery_1")
-
--- SEADシステムとIADSを連携
-SEAD_SYSTEM.init({
-    debug = true,
-    iadsNetwork = redIADS
-})
-
--- 全SAMをアクティブ化
+-- SEADシステムと連携
+SEAD_SYSTEM.init({iadsNetwork = redIADS})
 redIADS:activateAllSams()
 ```
 
-#### IADSの主な機能
+### 3. 弾薬管理システム
 
-- **SAMネットワーク管理**: SAMサイトをネットワークとして管理
-- **EWRからの情報配信**: 早期警戒レーダーの情報をSAMに配信
-- **脅威情報共有**: 検知した脅威を全ノードで共有
-- **協調レーダー運用**: 一部SAMが停波しても他のSAMがカバー
-- **セクター管理**: 防空エリアをセクターに分割して管理
-
-### 3. 自動セットアップ機能
-
-グループ名のパターンを使って自動的にSAMやEWRを追加できます。
+各SAMランチャーの残弾を追跡し、弾切れ時に自動でダーク化します。
 
 ```lua
-dofile(lfs.writedir() .. "Scripts/DCS-SAM/main.lua")
+local ammo = SAM_AMMO.new()
+ammo:init({
+    iadsNetwork = redIADS,
+    reloadEnabled = true,    -- 再装填シミュレーション
+    reloadTime = 300,        -- 再装填時間（秒）
+    autoGoGreen = true       -- 弾切れ時自動ダーク化
+})
 
+-- SAMグループのランチャーを登録
+ammo:registerGroup(Group.getByName("SA-10_Battery_1"))
+
+-- ステータス確認
+ammo:printStatus()
+```
+
+**弾薬状態:**
+| 状態 | 残弾率 | 動作 |
+|------|--------|------|
+| FULL | 100% | 通常運用 |
+| HIGH | 75-99% | 通常運用 |
+| MEDIUM | 50-74% | 通常運用 |
+| LOW | 25-49% | 優先度低下 |
+| CRITICAL | 1-24% | 優先度低下 |
+| EMPTY | 0% | 自動ダーク化 |
+
+### 4. 動的レーダー運用(EMCON)
+
+レーダーの送波パターンを制御し、SEAD機による位置特定を困難にします。
+
+```lua
+local emcon = SAM_EMCON.new()
+emcon:init({
+    iadsNetwork = redIADS,
+    level = SAM_EMCON.LEVEL.CHARLIE,  -- 制限送波
+    mode = SAM_EMCON.MODE.BLINK       -- 点滅モード
+})
+
+-- SAMを登録
+emcon:registerSam("SA-10_Battery_1")
+
+-- 点滅プロファイルをカスタマイズ
+emcon:setBlinkProfile("SA-10_Battery_1", {
+    onDuration = 15,     -- 送波時間（秒）
+    offDuration = 30,    -- 停波時間（秒）
+    randomize = true,    -- ランダム化
+    randomRange = 5      -- ランダム幅（±秒）
+})
+```
+
+**EMCONレベル:**
+| レベル | 説明 |
+|--------|------|
+| ALPHA | 全面送波禁止（完全沈黙） |
+| BRAVO | 最小限送波（EWRのみ） |
+| CHARLIE | 制限送波（点滅モード） |
+| DELTA | 通常運用 |
+| ECHO | 全面送波（最大警戒） |
+
+**運用モード:**
+| モード | 説明 |
+|--------|------|
+| STATIC | 固定状態 |
+| BLINK | 点滅モード（送波⇔停波サイクル） |
+| RANDOM | ランダム運用 |
+| SCHEDULED | スケジュール運用 |
+| THREAT_REACTIVE | 脅威検知時のみ送波 |
+
+### 5. 統計・ログシステム
+
+交戦記録を収集し、効率統計を生成します。
+
+```lua
+local logger = SAM_LOGGER.new()
+logger:init({iadsNetwork = redIADS})
+
+-- リアルタイム統計表示
+logger:printStatistics()
+
+-- ミッション終了レポート
+logger:printReport()
+
+-- カスタムイベントハンドラ
+logger:addEventListener(SAM_LOGGER.EVENT_TYPE.TARGET_KILLED, function(data)
+    trigger.action.outText("Kill confirmed: " .. data.target, 10)
+end)
+```
+
+**収集される統計:**
+- ミサイル発射数、命中数、撃墜数
+- 命中率、撃墜率、1撃墜あたりのミサイル数
+- 脅威検知数、交戦数
+- SEAD攻撃による停波回数
+
+### 6. 自動セットアップ機能
+
+```lua
 local iads = createIADS("My IADS", {debug = true})
 
--- "SAM_"で始まるグループを自動追加
+-- パターンで自動追加
 autoAddSamSites(iads, "SAM_", coalition.side.RED)
-
--- "EWR_"で始まるグループを自動追加
 autoAddEWRs(iads, "EWR_", coalition.side.RED)
 
--- 150km以内のユニットを自動リンク
+-- 距離ベースで自動リンク
 autoLinkByDistance(iads, 150000)
-
--- SEADと連携
-SEAD_SYSTEM.init({iadsNetwork = iads})
 ```
 
-### 4. セクター管理
-
-防空エリアをセクターに分割して、セクターごとに脅威レベルに応じた対応が可能です。
+### 7. セクター管理
 
 ```lua
--- セクターを作成（中心座標と半径）
-local sector1 = createSectorWithSams(iads, "Sector_North", {x = 100000, z = 200000}, 80000)
-
--- セクターの脅威レベルに応じて自動的にSAMがアクティブ化/停波される
-```
-
-### 5. 脅威情報共有システム
-
-脅威を追跡し、優先度に基づいて対応します。
-
-```lua
--- 脅威管理システムを作成
-local threatMgr = IADS_THREAT.new(iads)
-threatMgr:init()
-
--- 脅威を検出した場合
-threatMgr:reportDetection(targetUnit, "EWR_South")
-
--- 優先度順のトラック一覧を取得
-local tracks = threatMgr:getTracksByPriority()
-```
-
-## SAM設定のカスタマイズ
-
-`core/config.lua`でSAMの動作パラメータを変更できます。
-
-```lua
--- 例: SA-6の設定を変更
-SAM_CONFIG.Types["Kub 1S91 str"] = {
-    suppressionRate = 80,      -- 停波確率 80%
-    minOffDelay = 10,          -- 停波までの最小時間
-    maxOffDelay = 15,          -- 停波までの最大時間
-    minOnDelay = 30,           -- 再起動までの最小時間
-    maxOnDelay = 45,           -- 再起動までの最大時間
-    suppressGroup = true,      -- グループ全体を停波
-    category = "STR",
-    trackingRange = 75,
-    engagementRange = 24,
-}
+local sector = createSectorWithSams(iads, "Sector_North",
+    {x = 100000, z = 200000}, 80000)
 ```
 
 ## API リファレンス
 
-### SEAD_SYSTEM
+### SAM_AMMO
 
 | 関数 | 説明 |
 |------|------|
-| `init(options)` | SEADシステムを初期化 |
-| `setIADSNetwork(network)` | IADSネットワークと連携 |
-| `getSuppressedGroups()` | 現在停波中のグループを取得 |
-| `isGroupSuppressed(groupName)` | グループが停波中か確認 |
-| `manualSuppress(group, duration)` | 手動でグループを停波 |
+| `new()` | 弾薬管理システムを作成 |
+| `init(options)` | 初期化 |
+| `registerLauncher(unit)` | ランチャーを登録 |
+| `registerGroup(group)` | グループ内の全ランチャーを登録 |
+| `canEngage(groupName)` | 交戦可能か判定 |
+| `reloadNow(unitName)` | 即時再装填 |
+| `printStatus()` | ステータス表示 |
 
-### IADS_NETWORK
-
-| 関数 | 説明 |
-|------|------|
-| `new(name)` | ネットワークを作成 |
-| `init(options)` | ネットワークを初期化 |
-| `addSamSite(group, options)` | SAMサイトを追加 |
-| `addEWR(group, options)` | EWRを追加 |
-| `linkSamToEWR(samName, ewrName)` | SAMとEWRをリンク |
-| `linkSamToSam(sam1, sam2)` | SAM同士をリンク |
-| `activateSam(groupName)` | SAMをアクティブ化 |
-| `deactivateSam(groupName)` | SAMを停波 |
-| `activateAllSams()` | 全SAMをアクティブ化 |
-| `deactivateAllSams()` | 全SAMを停波 |
-| `getStatus()` | ネットワーク状態を取得 |
-| `printStatus()` | ステータスを画面に表示 |
-
-### IADS_THREAT
+### SAM_EMCON
 
 | 関数 | 説明 |
 |------|------|
-| `new(network)` | 脅威管理システムを作成 |
-| `reportDetection(unit, detectedBy)` | 脅威検出を報告 |
-| `getTracksByPriority()` | 優先度順のトラック一覧を取得 |
-| `getNearestThreat(pos)` | 最も近い脅威を取得 |
-| `getThreatsInRange(pos, range)` | 範囲内の脅威を取得 |
+| `new()` | EMCONシステムを作成 |
+| `init(options)` | 初期化 |
+| `setLevel(level)` | EMCONレベルを設定 |
+| `setMode(mode)` | 運用モードを設定 |
+| `registerSam(groupName)` | SAMを登録 |
+| `setBlinkProfile(groupName, profile)` | 点滅プロファイルを設定 |
+| `addSchedule(schedule)` | スケジュールを追加 |
+| `printStatus()` | ステータス表示 |
+
+### SAM_LOGGER
+
+| 関数 | 説明 |
+|------|------|
+| `new()` | ロガーを作成 |
+| `init(options)` | 初期化 |
+| `logEvent(eventType, data)` | イベントを記録 |
+| `addEventListener(type, handler)` | イベントハンドラを登録 |
+| `getStatistics()` | 統計を取得 |
+| `generateReport()` | レポートを生成 |
+| `printStatistics()` | 統計を表示 |
+| `printReport()` | レポートを表示 |
+
+### 統合関数
+
+| 関数 | 説明 |
+|------|------|
+| `setupFullIADS(name, options)` | 全システムを一括セットアップ |
+| `createAmmoSystem(options)` | 弾薬管理システムを作成 |
+| `createEmconSystem(options)` | EMCONシステムを作成 |
+| `createLoggerSystem(options)` | ロガーを作成 |
+| `printFullStatus()` | 全システムのステータスを表示 |
+| `printMissionReport()` | ミッションレポートを表示 |
+
+## 開発ロードマップ
+
+### Phase 1 (完了)
+- ✅ 弾薬管理システム
+- ✅ 動的レーダー運用(EMCON)
+- ✅ 統計・ログシステム
+
+### Phase 2 (予定)
+- ポイントディフェンス連携
+- データリンクシミュレーション
+- 航路予測システム
+
+### Phase 3 (予定)
+- デコイ/おとりシステム
+- ジャマー対策
+- 修復/再配置システム
+
+### Phase 4 (予定)
+- AIコマンダー
+- F10マップ連携
+
+### Phase 5 (予定)
+- マルチプレイヤー対応
 
 ## ライセンス
 
