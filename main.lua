@@ -57,7 +57,7 @@
 -- ============================================
 -- バージョン情報
 -- ============================================
-DCS_SAM_VERSION = "2.3.0"
+DCS_SAM_VERSION = "2.4.0"
 DCS_SAM_AUTHOR = "DCS Mission Creation Scripts"
 
 -- ============================================
@@ -73,7 +73,9 @@ IADS_SYSTEMS = {
     predictor = nil,     -- 航路予測 (Phase 2)
     decoy = nil,         -- デコイシステム (Phase 3)
     antiJam = nil,       -- ジャマー対策 (Phase 3)
-    maintenance = nil    -- 修復/再配置 (Phase 3)
+    maintenance = nil,   -- 修復/再配置 (Phase 3)
+    commander = nil,     -- AIコマンダー (Phase 4)
+    f10Map = nil         -- F10マップ連携 (Phase 4)
 }
 
 -- ============================================
@@ -850,6 +852,116 @@ function printAdvancedStatus()
     if IADS_SYSTEMS.maintenance then
         IADS_SYSTEMS.maintenance:printStatus()
     end
+
+    -- AIコマンダー
+    if IADS_SYSTEMS.commander then
+        IADS_SYSTEMS.commander:printStatus()
+    end
+
+    -- F10マップ
+    if IADS_SYSTEMS.f10Map then
+        IADS_SYSTEMS.f10Map:printStatus()
+    end
+end
+
+-- ============================================
+-- Phase 4: AIコマンダー
+-- ============================================
+
+--[[
+    AIコマンダーを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - tacticalMode: 戦術モード (CONSERVATIVE/BALANCED/AGGRESSIVE/AMBUSH)
+        - defenseCondition: 初期防空態勢
+        - updateInterval: 更新間隔（秒）
+        - tactics: 戦術設定テーブル
+    @return IADS_COMMANDER インスタンス
+]]
+function createCommanderSystem(iadsNetwork, options)
+    options = options or {}
+
+    local commander = IADS_COMMANDER.new(iadsNetwork)
+    commander:init(options)
+
+    IADS_SYSTEMS.commander = commander
+
+    SAM_UTILS.debug("[Main] AI Commander system created")
+    return commander
+end
+
+-- ============================================
+-- Phase 4: F10マップ連携
+-- ============================================
+
+--[[
+    F10マップ連携システムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - updateInterval: 更新間隔（秒）
+        - displaySettings: 表示設定
+    @return IADS_F10_MAP インスタンス
+]]
+function createF10MapSystem(iadsNetwork, options)
+    options = options or {}
+
+    local f10Map = IADS_F10_MAP.new(iadsNetwork)
+    f10Map:init(options)
+
+    IADS_SYSTEMS.f10Map = f10Map
+
+    SAM_UTILS.debug("[Main] F10 Map system created")
+    return f10Map
+end
+
+-- ============================================
+-- Phase 4統合: 完全なIADSセットアップ
+-- ============================================
+
+--[[
+    Phase 1+2+3+4の全システムを一括でセットアップ
+    @param name IADSネットワーク名
+    @param options テーブル
+        -- Phase 1-3 オプション
+        （setupFullCountermeasuresIADSと同じ）
+        -- Phase 4 オプション
+        - commander: AIコマンダー有効 (boolean)
+        - f10Map: F10マップ連携有効 (boolean)
+        - tacticalMode: 戦術モード
+        - defenseCondition: 初期防空態勢
+    @return テーブル（全システム）
+]]
+function setupCompleteIADS(name, options)
+    options = options or {}
+
+    -- Phase 1+2+3 セットアップを実行
+    local systems = setupFullCountermeasuresIADS(name, options)
+
+    local iads = systems.iads
+
+    -- Phase 4: AIコマンダー
+    if options.commander ~= false then
+        local commander = createCommanderSystem(iads, {
+            tacticalMode = options.tacticalMode or IADS_COMMANDER.TACTICAL_MODE.BALANCED,
+            defenseCondition = options.defenseCondition or IADS_COMMANDER.DEFENSE_CONDITION.ELEVATED,
+            updateInterval = options.commanderUpdateInterval or 5,
+            tactics = options.tactics
+        })
+        systems.commander = commander
+    end
+
+    -- Phase 4: F10マップ連携
+    if options.f10Map ~= false then
+        local f10Map = createF10MapSystem(iads, {
+            updateInterval = options.f10MapUpdateInterval or 10,
+            displaySettings = options.f10MapDisplaySettings
+        })
+        systems.f10Map = f10Map
+    end
+
+    SAM_UTILS.debug("[Main] Complete IADS setup finished")
+
+    return systems
 end
 
 -- ============================================

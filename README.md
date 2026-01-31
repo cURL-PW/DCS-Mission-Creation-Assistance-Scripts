@@ -20,6 +20,8 @@ DCS Worldミッション作成支援スクリプト集
 - **デコイ/おとり**: ARM誘引用の偽レーダー送信機
 - **ジャマー対策**: ECCMとホームオンジャム
 - **修復/再配置**: 損傷SAMの修復とシュート＆スクート
+- **AIコマンダー**: 脅威に応じた自動IADS管理
+- **F10マップ連携**: マップ上のステータス表示とラジオメニュー制御
 
 ## ディレクトリ構造
 
@@ -46,6 +48,10 @@ DCS-Mission-Creation-Assistance-Scripts/
 ├── countermeasures/
 │   ├── decoy.lua         # デコイ/おとり (Phase 3)
 │   └── anti_jam.lua      # ジャマー対策 (Phase 3)
+├── ai/
+│   └── commander.lua     # AIコマンダー (Phase 4)
+├── ui/
+│   └── f10_map.lua       # F10マップ連携 (Phase 4)
 └── misc/
     └── addSamlist.lua    # SAMユニット列挙ユーティリティ
 ```
@@ -381,6 +387,46 @@ local sector = createSectorWithSams(iads, "Sector_North",
 | `createMaintenanceSystem(network, options)` | 修復/再配置システムを作成 |
 | `deployDecoysAroundAllSams(iads, decoy, options)` | 全SAMにデコイを配置 |
 
+### IADS_COMMANDER (Phase 4)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | AIコマンダーを作成 |
+| `init(options)` | 初期化 |
+| `setDefenseCondition(condition)` | 防空態勢を設定 |
+| `setTacticalMode(mode)` | 戦術モードを設定 |
+| `setPriorityType(priority)` | 優先度タイプを設定 |
+| `updateThreatAssessment()` | 脅威評価を更新 |
+| `updateResourceStatus()` | リソース状態を更新 |
+| `makeTacticalDecisions()` | 戦術的意思決定を実行 |
+| `setCallback(event, handler)` | コールバックを設定 |
+| `getStatus()` | ステータスを取得 |
+| `printStatus()` | ステータス表示 |
+
+### IADS_F10_MAP (Phase 4)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | F10マップシステムを作成 |
+| `init(options)` | 初期化 |
+| `addMarker(id, type, position, text)` | マーカーを追加 |
+| `updateMarker(id, type, position, text)` | マーカーを更新 |
+| `removeMarker(id)` | マーカーを削除 |
+| `refreshAllMarkers()` | 全マーカーを更新 |
+| `toggleDisplay(setting)` | 表示設定を切り替え |
+| `showAllStatus()` | 全ステータス表示 |
+| `activateAllSams()` | 全SAMを起動 |
+| `deactivateAllSams()` | 全SAMを停波 |
+| `printStatus()` | ステータス表示 |
+
+### Phase 4 統合関数
+
+| 関数 | 説明 |
+|------|------|
+| `setupCompleteIADS(name, options)` | Phase 1+2+3+4全システムを一括セットアップ |
+| `createCommanderSystem(network, options)` | AIコマンダーを作成 |
+| `createF10MapSystem(network, options)` | F10マップシステムを作成 |
+
 ## Phase 2 使用例
 
 ### ポイントディフェンス
@@ -645,6 +691,127 @@ local systems = setupFullCountermeasuresIADS("Red IADS", {
 })
 ```
 
+## Phase 4 使用例
+
+### AIコマンダー
+
+脅威レベルに応じて自動的にIADSを管理するAIコマンダーです。
+
+```lua
+local commander = createCommanderSystem(iads, {
+    tacticalMode = IADS_COMMANDER.TACTICAL_MODE.BALANCED,
+    defenseCondition = IADS_COMMANDER.DEFENSE_CONDITION.ELEVATED,
+    updateInterval = 5
+})
+
+-- 戦術モードを変更
+commander:setTacticalMode(IADS_COMMANDER.TACTICAL_MODE.AMBUSH)
+
+-- 防空態勢を手動設定
+commander:setDefenseCondition(IADS_COMMANDER.DEFENSE_CONDITION.SEVERE)
+
+-- コールバックを設定
+commander:setCallback("onDefconChange", function(oldLevel, newLevel)
+    trigger.action.outText("DEFCON changed: " .. newLevel, 10)
+end)
+
+-- ステータス表示
+commander:printStatus()
+```
+
+**防空態勢レベル（DEFCON相当）:**
+| レベル | 説明 | 動作 |
+|--------|------|------|
+| PEACE | 平時 | 最小警戒、ほとんどのSAMがダーク |
+| ELEVATED | 警戒 | 一部SAM起動 |
+| HIGH | 高警戒 | 多くのSAM起動 |
+| SEVERE | 厳戒 | ほぼ全SAM起動 |
+| CRITICAL | 最大警戒 | 全SAM稼働 |
+
+**戦術モード:**
+| モード | 説明 |
+|--------|------|
+| CONSERVATIVE | SAM温存、弾薬/HP低下時は停波 |
+| BALANCED | バランス重視、脅威に応じて起動 |
+| AGGRESSIVE | 積極的、脅威検知で即座に全起動 |
+| AMBUSH | 待ち伏せ、射程内に入るまでダーク維持 |
+
+### F10マップ連携
+
+F10マップ上にIADS情報を表示し、ラジオメニューで制御できます。
+
+```lua
+local f10Map = createF10MapSystem(iads, {
+    updateInterval = 10,
+    displaySettings = {
+        showSamSites = true,
+        showEwrSites = true,
+        showThreats = true,
+        showDetailedInfo = true
+    }
+})
+
+-- 表示設定を切り替え
+f10Map:toggleDisplay("showThreats")
+
+-- 全マーカーを更新
+f10Map:refreshAllMarkers()
+```
+
+**ラジオメニューコマンド:**
+| メニュー | コマンド | 説明 |
+|----------|----------|------|
+| Status | Show All Status | 全システムステータス表示 |
+| Status | Show SAM Status | SAMステータス表示 |
+| Status | Show Threat Status | 脅威ステータス表示 |
+| DEFCON | PEACE/ELEVATED/HIGH/SEVERE/CRITICAL | 防空態勢設定 |
+| Tactics | Conservative/Balanced/Aggressive/Ambush | 戦術モード設定 |
+| SAM Control | Activate All | 全SAM起動 |
+| SAM Control | Deactivate All | 全SAM停波 |
+| Display | Toggle SAMs/Threats/EWRs | 表示切り替え |
+| Display | Refresh Map | マーカー更新 |
+
+**マーカーコマンド（マップ上に入力）:**
+```
+IADS STATUS       - 位置のステータス表示
+IADS ACTIVATE     - 近くのSAMを起動
+IADS DEACTIVATE   - 近くのSAMを停波
+IADS DEFCON HIGH  - DEFCON設定
+```
+
+### 完全なIADS一括セットアップ
+
+```lua
+local systems = setupCompleteIADS("Red IADS", {
+    -- Phase 1
+    samPattern = "SAM_",
+    ewrPattern = "EWR_",
+    linkDistance = 150000,
+    emconMode = SAM_EMCON.MODE.BLINK,
+
+    -- Phase 2
+    pointDefense = true,
+    datalink = true,
+    predictor = true,
+    silentLaunch = true,
+    hvTargets = {
+        {type = "airbase", name = "Kutaisi", options = {priority = 1}}
+    },
+
+    -- Phase 3
+    decoy = true,
+    antiJam = true,
+    maintenance = true,
+    shootAndScoot = {enabled = true, shotsBeforeMove = 2},
+
+    -- Phase 4
+    commander = true,
+    f10Map = true,
+    tacticalMode = IADS_COMMANDER.TACTICAL_MODE.BALANCED,
+    defenseCondition = IADS_COMMANDER.DEFENSE_CONDITION.ELEVATED
+})
+```
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -662,9 +829,9 @@ local systems = setupFullCountermeasuresIADS("Red IADS", {
 - ✅ ジャマー対策（ECCM、HOJ、三角測量）
 - ✅ 修復/再配置システム（シュート＆スクート）
 
-### Phase 4 (予定)
-- AIコマンダー
-- F10マップ連携
+### Phase 4 (完了)
+- ✅ AIコマンダー（自動IADS管理、戦術モード）
+- ✅ F10マップ連携（ステータス表示、ラジオメニュー制御）
 
 ### Phase 5 (予定)
 - マルチプレイヤー対応
