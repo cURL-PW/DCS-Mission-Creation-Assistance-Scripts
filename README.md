@@ -26,13 +26,16 @@ DCS-Mission-Creation-Assistance-Scripts/
 │   ├── config.lua        # SAM設定データ
 │   ├── utils.lua         # 共通ユーティリティ
 │   ├── sead.lua          # SEADシミュレーションシステム
-│   ├── ammo.lua          # 弾薬管理システム
-│   ├── emcon.lua         # EMCONシステム
-│   └── logger.lua        # 統計・ログシステム
+│   ├── ammo.lua          # 弾薬管理システム (Phase 1)
+│   ├── emcon.lua         # EMCONシステム (Phase 1)
+│   └── logger.lua        # 統計・ログシステム (Phase 1)
 ├── iads/
 │   ├── network.lua       # IADSネットワーク管理
 │   ├── sector.lua        # 防空セクター管理
-│   └── threat.lua        # 脅威情報共有システム
+│   ├── threat.lua        # 脅威情報共有システム
+│   ├── point_defense.lua # ポイントディフェンス (Phase 2)
+│   ├── datalink.lua      # データリンク (Phase 2)
+│   └── predictor.lua     # 航路予測 (Phase 2)
 └── misc/
     └── addSamlist.lua    # SAMユニット列挙ユーティリティ
 ```
@@ -272,6 +275,126 @@ local sector = createSectorWithSams(iads, "Sector_North",
 | `printFullStatus()` | 全システムのステータスを表示 |
 | `printMissionReport()` | ミッションレポートを表示 |
 
+### IADS_POINT_DEFENSE (Phase 2)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | ポイントディフェンスを作成 |
+| `addTarget(unit, options)` | ユニットを防護対象に追加 |
+| `addStaticTarget(id, position, options)` | 座標を防護対象に追加 |
+| `addZoneTarget(zoneName, options)` | トリガーゾーンを防護対象に追加 |
+| `addAirbase(airbaseName, options)` | 飛行場を防護対象に追加 |
+| `printStatus()` | ステータス表示 |
+
+### IADS_DATALINK (Phase 2)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | データリンクを作成 |
+| `shareTrack(track, sourceId)` | トラックを共有 |
+| `canSilentLaunchAt(samName, trackId)` | サイレントローンチ可能か確認 |
+| `getAvailableTracks(samName)` | 利用可能トラックを取得 |
+| `printStatus()` | ステータス表示 |
+
+### IADS_PREDICTOR (Phase 2)
+
+| 関数 | 説明 |
+|------|------|
+| `new(network)` | 航路予測を作成 |
+| `predictPath(threat)` | 脅威の航路を予測 |
+| `getSamsToPreActivate()` | 事前アクティブ化が必要なSAMを取得 |
+| `getPrediction(threatId)` | 特定脅威の予測を取得 |
+| `printStatus()` | ステータス表示 |
+
+### Phase 2 統合関数
+
+| 関数 | 説明 |
+|------|------|
+| `setupAdvancedIADS(name, options)` | Phase 1+2全システムを一括セットアップ |
+| `createPointDefenseSystem(network, options)` | ポイントディフェンスを作成 |
+| `createDatalinkSystem(network, options)` | データリンクを作成 |
+| `createPredictorSystem(network, options)` | 航路予測を作成 |
+| `printAdvancedStatus()` | 全システムの詳細ステータスを表示 |
+
+## Phase 2 使用例
+
+### ポイントディフェンス
+
+```lua
+local pd = createPointDefenseSystem(iads, {
+    autoActivate = true,
+    layeredDefense = true
+})
+
+-- 飛行場を防護
+pd:addAirbase("Kutaisi", {priority = 1})
+
+-- トリガーゾーンを防護
+pd:addZoneTarget("HQ_Zone", {priority = 2})
+
+-- ユニットを防護
+pd:addTarget(Unit.getByName("Command_Post"), {
+    priority = 1,
+    protectionRadius = 30000
+})
+```
+
+### データリンク（サイレントローンチ）
+
+```lua
+local datalink = createDatalinkSystem(iads, {
+    silentLaunchEnabled = true,
+    linkDelay = 1
+})
+
+-- SAMがダーク状態でもEWR情報で追跡可能か確認
+if datalink:canSilentLaunchAt("SA-10_Battery", "TRK-0001") then
+    -- サイレントローンチ可能
+end
+```
+
+### 航路予測
+
+```lua
+local predictor = createPredictorSystem(iads, {
+    predictionTime = 120,      -- 2分先まで予測
+    autoPreActivate = true     -- 自動事前アクティブ化
+})
+
+-- 特定脅威の予測を取得
+local prediction = predictor:getPrediction("enemy_fighter_1")
+if prediction then
+    -- 予測経路上のSAM交差を確認
+    for samName, intersection in pairs(prediction.samIntersections) do
+        print(samName .. " will be in range in " .. intersection.entryTimeOffset .. "s")
+    end
+end
+```
+
+### 高度なIADS一括セットアップ
+
+```lua
+local systems = setupAdvancedIADS("Red IADS", {
+    -- Phase 1
+    samPattern = "SAM_",
+    ewrPattern = "EWR_",
+    linkDistance = 150000,
+    emconMode = SAM_EMCON.MODE.BLINK,
+
+    -- Phase 2
+    pointDefense = true,
+    datalink = true,
+    predictor = true,
+    silentLaunch = true,
+
+    -- 高価値目標
+    hvTargets = {
+        {type = "airbase", name = "Kutaisi", options = {priority = 1}},
+        {type = "zone", name = "HQ_Zone", options = {priority = 2}}
+    }
+})
+```
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -279,10 +402,10 @@ local sector = createSectorWithSams(iads, "Sector_North",
 - ✅ 動的レーダー運用(EMCON)
 - ✅ 統計・ログシステム
 
-### Phase 2 (予定)
-- ポイントディフェンス連携
-- データリンクシミュレーション
-- 航路予測システム
+### Phase 2 (完了)
+- ✅ ポイントディフェンス連携
+- ✅ データリンクシミュレーション
+- ✅ 航路予測システム
 
 ### Phase 3 (予定)
 - デコイ/おとりシステム

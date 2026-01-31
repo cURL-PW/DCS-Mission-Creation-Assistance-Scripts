@@ -57,17 +57,20 @@
 -- ============================================
 -- バージョン情報
 -- ============================================
-DCS_SAM_VERSION = "2.1.0"
+DCS_SAM_VERSION = "2.2.0"
 DCS_SAM_AUTHOR = "DCS Mission Creation Scripts"
 
 -- ============================================
 -- 統合システムインスタンス格納
 -- ============================================
 IADS_SYSTEMS = {
-    networks = {},    -- IADSネットワーク
-    ammo = nil,       -- 弾薬管理システム
-    emcon = nil,      -- EMCONシステム
-    logger = nil      -- ロガー
+    networks = {},       -- IADSネットワーク
+    ammo = nil,          -- 弾薬管理システム
+    emcon = nil,         -- EMCONシステム
+    logger = nil,        -- ロガー
+    pointDefense = nil,  -- ポイントディフェンス (Phase 2)
+    datalink = nil,      -- データリンク (Phase 2)
+    predictor = nil      -- 航路予測 (Phase 2)
 }
 
 -- ============================================
@@ -470,6 +473,181 @@ function printMissionReport()
         IADS_SYSTEMS.logger:printReport()
     else
         SAM_UTILS.info("[Report] Logger not initialized")
+    end
+end
+
+-- ============================================
+-- Phase 2: ポイントディフェンス
+-- ============================================
+
+--[[
+    ポイントディフェンスシステムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - autoActivate: 自動アクティブ化
+        - layeredDefense: 多層防護有効
+    @return IADS_POINT_DEFENSE インスタンス
+]]
+function createPointDefenseSystem(iadsNetwork, options)
+    options = options or {}
+
+    local pd = IADS_POINT_DEFENSE.new(iadsNetwork)
+    pd:init(options)
+
+    IADS_SYSTEMS.pointDefense = pd
+
+    SAM_UTILS.debug("[Main] Point Defense system created")
+    return pd
+end
+
+-- ============================================
+-- Phase 2: データリンク
+-- ============================================
+
+--[[
+    データリンクシステムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - silentLaunchEnabled: サイレントローンチ有効
+        - linkDelay: リンク遅延（秒）
+    @return IADS_DATALINK インスタンス
+]]
+function createDatalinkSystem(iadsNetwork, options)
+    options = options or {}
+
+    local dl = IADS_DATALINK.new(iadsNetwork)
+    dl:init(options)
+
+    IADS_SYSTEMS.datalink = dl
+
+    SAM_UTILS.debug("[Main] DataLink system created")
+    return dl
+end
+
+-- ============================================
+-- Phase 2: 航路予測
+-- ============================================
+
+--[[
+    航路予測システムを作成・初期化
+    @param iadsNetwork IADSネットワーク参照
+    @param options テーブル
+        - predictionTime: 予測時間（秒）
+        - autoPreActivate: 自動事前アクティブ化
+    @return IADS_PREDICTOR インスタンス
+]]
+function createPredictorSystem(iadsNetwork, options)
+    options = options or {}
+
+    local pred = IADS_PREDICTOR.new(iadsNetwork)
+    pred:init(options)
+
+    IADS_SYSTEMS.predictor = pred
+
+    SAM_UTILS.debug("[Main] Predictor system created")
+    return pred
+end
+
+-- ============================================
+-- Phase 2統合: 高度なIADSセットアップ
+-- ============================================
+
+--[[
+    Phase 1+2の全システムを一括でセットアップ
+    @param name IADSネットワーク名
+    @param options テーブル
+        -- Phase 1 オプション
+        - debug: デバッグモード
+        - samPattern: SAMグループ名パターン
+        - ewrPattern: EWRグループ名パターン
+        - coalition: 陣営フィルタ
+        - linkDistance: 自動リンク距離
+        - emconLevel: 初期EMCONレベル
+        - emconMode: EMCON運用モード
+        - reloadEnabled: 再装填シミュレーション
+        -- Phase 2 オプション
+        - pointDefense: ポイントディフェンス有効 (boolean)
+        - datalink: データリンク有効 (boolean)
+        - predictor: 航路予測有効 (boolean)
+        - silentLaunch: サイレントローンチ有効 (boolean)
+        - hvTargets: 高価値目標のリスト (テーブル配列)
+    @return テーブル {iads, ammo, emcon, logger, sead, pointDefense, datalink, predictor}
+]]
+function setupAdvancedIADS(name, options)
+    options = options or {}
+
+    -- Phase 1 セットアップを実行
+    local systems = setupFullIADS(name, options)
+
+    local iads = systems.iads
+
+    -- Phase 2: ポイントディフェンス
+    if options.pointDefense ~= false then
+        local pd = createPointDefenseSystem(iads, {
+            autoActivate = options.autoActivate ~= false,
+            layeredDefense = options.layeredDefense ~= false
+        })
+        systems.pointDefense = pd
+
+        -- 高価値目標を追加
+        if options.hvTargets then
+            for _, hvt in ipairs(options.hvTargets) do
+                if hvt.type == "airbase" then
+                    pd:addAirbase(hvt.name, hvt.options)
+                elseif hvt.type == "zone" then
+                    pd:addZoneTarget(hvt.name, hvt.options)
+                elseif hvt.type == "unit" then
+                    local unit = Unit.getByName(hvt.name)
+                    if unit then
+                        pd:addTarget(unit, hvt.options)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Phase 2: データリンク
+    if options.datalink ~= false then
+        local dl = createDatalinkSystem(iads, {
+            silentLaunchEnabled = options.silentLaunch ~= false
+        })
+        systems.datalink = dl
+    end
+
+    -- Phase 2: 航路予測
+    if options.predictor ~= false then
+        local pred = createPredictorSystem(iads, {
+            autoPreActivate = true,
+            predictionTime = options.predictionTime or 120
+        })
+        systems.predictor = pred
+    end
+
+    SAM_UTILS.debug("[Main] Advanced IADS setup completed")
+
+    return systems
+end
+
+--[[
+    全システムの詳細ステータスを表示
+]]
+function printAdvancedStatus()
+    -- 基本ステータス
+    printFullStatus()
+
+    -- ポイントディフェンス
+    if IADS_SYSTEMS.pointDefense then
+        IADS_SYSTEMS.pointDefense:printStatus()
+    end
+
+    -- データリンク
+    if IADS_SYSTEMS.datalink then
+        IADS_SYSTEMS.datalink:printStatus()
+    end
+
+    -- 航路予測
+    if IADS_SYSTEMS.predictor then
+        IADS_SYSTEMS.predictor:printStatus()
     end
 end
 
