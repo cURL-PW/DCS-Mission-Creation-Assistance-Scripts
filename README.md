@@ -24,6 +24,7 @@ DCS Worldミッション作成支援スクリプト集
 - **F10マップ連携**: マップ上のステータス表示とラジオメニュー制御
 - **マルチプレイヤー同期**: クライアント間IADS状態同期
 - **陣営別フィルタ**: Red/Blue別の情報アクセス制御
+- **Web UI**: ブラウザベースのリアルタイムIADS管理インターフェース
 
 ## ディレクトリ構造
 
@@ -57,8 +58,33 @@ DCS-Mission-Creation-Assistance-Scripts/
 ├── multiplayer/
 │   ├── sync.lua          # マルチプレイヤー同期 (Phase 5)
 │   └── coalition.lua     # 陣営別フィルタ (Phase 5)
-└── misc/
-    └── addSamlist.lua    # SAMユニット列挙ユーティリティ
+├── misc/
+│   └── addSamlist.lua    # SAMユニット列挙ユーティリティ
+└── web-ui/               # Web UI システム
+    ├── DESIGN.md         # 設計書
+    ├── dcs/
+    │   ├── web_export.lua  # DCS→JSON出力
+    │   └── web_import.lua  # JSON→DCSコマンド入力
+    ├── server/           # Bridge Server (Node.js)
+    │   ├── package.json
+    │   └── src/
+    │       ├── index.ts
+    │       ├── api/
+    │       │   ├── routes.ts
+    │       │   └── sessionManager.ts
+    │       ├── services/
+    │       │   └── fileWatcher.ts
+    │       └── types/
+    │           └── iads.ts
+    └── client/           # React SPA
+        ├── package.json
+        ├── vite.config.ts
+        └── src/
+            ├── App.tsx
+            ├── components/
+            ├── services/
+            ├── store/
+            └── types/
 ```
 
 ## クイックスタート
@@ -968,6 +994,163 @@ local redIADS = dualSystems.red.iads
 local blueIADS = dualSystems.blue.iads
 ```
 
+## Web UI システム
+
+ブラウザベースのリアルタイムIADS管理インターフェースです。DCSゲーム外からSAMサイトの監視・制御が可能です。
+
+### アーキテクチャ
+
+```
+┌──────────────────┐    JSON Files    ┌──────────────────┐    WebSocket/REST    ┌──────────────────┐
+│   DCS World      │ ←─────────────→  │  Bridge Server   │ ←─────────────────→  │   React Client   │
+│  (Lua Scripts)   │                  │   (Node.js)      │                      │   (Browser)      │
+└──────────────────┘                  └──────────────────┘                      └──────────────────┘
+  web_export.lua                        Express + WS                              React + Zustand
+  web_import.lua                        Session Manager                           Tailwind CSS
+```
+
+### インストール
+
+#### 1. Bridge Server のセットアップ
+
+```bash
+cd web-ui/server
+npm install
+npm run build
+npm start
+```
+
+サーバーは `http://localhost:3000` で起動します。
+
+#### 2. React Client のセットアップ
+
+```bash
+cd web-ui/client
+npm install
+npm run dev
+```
+
+開発サーバーは `http://localhost:5173` で起動します。
+
+#### 3. DCS スクリプトの設定
+
+ミッションエディタのトリガーで以下を読み込みます：
+
+```lua
+-- IADSシステムのセットアップ後に追加
+dofile(lfs.writedir() .. "Scripts/DCS-SAM/web-ui/dcs/web_export.lua")
+dofile(lfs.writedir() .. "Scripts/DCS-SAM/web-ui/dcs/web_import.lua")
+
+-- Web UIエクスポートを初期化
+IADS_WEB_EXPORT:init({
+    iadsNetwork = redIADS,
+    exportPath = lfs.writedir() .. "Scripts/DCS-SAM/web-ui/data/",
+    updateInterval = 1,
+    coalition = 1  -- RED
+})
+
+-- Web UIインポートを初期化
+IADS_WEB_IMPORT:init({
+    iadsNetwork = redIADS,
+    importPath = lfs.writedir() .. "Scripts/DCS-SAM/web-ui/data/",
+    pollInterval = 0.5
+})
+```
+
+### Web UI 使用方法
+
+#### ログイン
+
+1. ブラウザで `http://localhost:5173` を開く
+2. プレイヤー名を入力
+3. 陣営（RED / BLUE）を選択
+4. アクセスレベルを選択
+5. 「Enter Control Center」をクリック
+
+**Game Master モード**: 全陣営の情報にアクセス可能な管理者モード
+
+#### ダッシュボード
+
+- **DEFCON レベル**: 現在の防空態勢を表示・変更
+- **戦術モード**: CONSERVATIVE / BALANCED / AGGRESSIVE / AMBUSH
+- **SAM サイトサマリー**: 状態別のSAM数を表示
+- **脅威サマリー**: 脅威レベル別の件数を表示
+
+#### SAM サイト管理
+
+- SAMサイト一覧の表示
+- 状態フィルタ（GREEN / DARK / TRACKING / ENGAGING）
+- 個別SAMの状態変更
+- 全SAM一括制御
+
+#### 脅威モニター
+
+- リアルタイム脅威追跡
+- 脅威レベル別表示（CRITICAL / HIGH / MEDIUM / LOW）
+- SEAD脅威の強調表示
+
+### Web UI API リファレンス
+
+#### REST API エンドポイント
+
+| エンドポイント | メソッド | 説明 |
+|---------------|---------|------|
+| `/api/health` | GET | ヘルスチェック |
+| `/api/status` | GET | 接続状態 |
+| `/api/state` | GET | 完全なIADS状態 |
+| `/api/session` | POST | セッション作成（ログイン） |
+| `/api/session` | GET | セッション情報取得 |
+| `/api/session` | DELETE | セッション削除（ログアウト） |
+| `/api/sams` | GET | SAMサイト一覧 |
+| `/api/sams/:name` | GET | 特定SAMの詳細 |
+| `/api/sams/:name/state` | POST | SAM状態変更 |
+| `/api/sams/all/state` | POST | 全SAM状態変更 |
+| `/api/threats` | GET | 脅威一覧 |
+| `/api/defcon` | GET | DEFCONレベル取得 |
+| `/api/defcon` | POST | DEFCONレベル設定 |
+| `/api/tactical` | GET | 戦術モード取得 |
+| `/api/tactical` | POST | 戦術モード設定 |
+| `/api/multiplayer` | GET | マルチプレイヤー情報 |
+| `/api/coalition/:id` | GET | 陣営別データ |
+
+#### WebSocket イベント
+
+| イベント | 方向 | 説明 |
+|---------|------|------|
+| `state:update` | サーバー→クライアント | 状態更新 |
+| `sam:updated` | サーバー→クライアント | SAM状態変更通知 |
+| `threat:new` | サーバー→クライアント | 新規脅威検出 |
+| `threat:updated` | サーバー→クライアント | 脅威情報更新 |
+| `defcon:changed` | サーバー→クライアント | DEFCON変更通知 |
+
+#### セッション認証
+
+リクエストヘッダーに `X-Session-Id` を含めて認証します：
+
+```typescript
+fetch('/api/sams', {
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Session-Id': 'your-session-id'
+  }
+});
+```
+
+### 陣営別アクセス制御
+
+| 陣営 | アクセス範囲 |
+|------|-------------|
+| RED | RED陣営のSAM・脅威のみ |
+| BLUE | BLUE陣営のSAM・脅威のみ |
+| ALL (Game Master) | 全陣営のSAM・脅威 |
+
+| アクセスレベル | 権限 |
+|---------------|------|
+| VIEW | 閲覧のみ |
+| OPERATOR | SAM状態変更可 |
+| COMMANDER | DEFCON/戦術モード変更可 |
+| ADMIN | 全権限（Game Master用） |
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -992,6 +1175,12 @@ local blueIADS = dualSystems.blue.iads
 ### Phase 5 (完了)
 - ✅ マルチプレイヤー同期（状態同期、ホスト/クライアント管理）
 - ✅ 陣営別情報フィルタ（Red/Blue別アクセス制御）
+
+### Web UI (完了)
+- ✅ DCS↔サーバー間ファイルベース通信
+- ✅ Bridge Server（Node.js + Express + WebSocket）
+- ✅ React SPA（Zustand + Tailwind CSS）
+- ✅ マルチプレイヤー対応（セッション管理、陣営別アクセス制御）
 
 ## ライセンス
 
