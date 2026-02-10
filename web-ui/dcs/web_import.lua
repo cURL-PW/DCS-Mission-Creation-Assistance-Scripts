@@ -21,7 +21,28 @@ IADS_WEB_IMPORT.DEFAULT_CONFIG = {
     pollInterval = 0.5,  -- 秒
     deleteAfterProcess = true,
     validateCommands = true,
-    maxCommandsPerBatch = 20
+    maxCommandsPerBatch = 20,
+    -- マルチプレイヤー設定
+    enforceCoalition = true,  -- コアリション制限を有効化
+    allowGameMasterOverride = true,  -- Game Masterは全コアリション制御可能
+    logCommandSource = true  -- コマンド発行元を記録
+}
+
+-- コアリション定数
+IADS_WEB_IMPORT.COALITION = {
+    NEUTRAL = 0,
+    RED = 1,
+    BLUE = 2,
+    ALL = -1  -- Game Master用
+}
+
+-- アクセスレベル
+IADS_WEB_IMPORT.ACCESS_LEVEL = {
+    NONE = 0,
+    VIEW = 1,
+    OPERATOR = 2,
+    COMMANDER = 3,
+    ADMIN = 4
 }
 
 -- コマンドタイプ
@@ -29,6 +50,7 @@ IADS_WEB_IMPORT.COMMAND_TYPES = {
     -- SAM制御
     SET_SAM_STATE = "SET_SAM_STATE",
     SET_ALL_SAMS_STATE = "SET_ALL_SAMS_STATE",
+    SET_COALITION_SAMS_STATE = "SET_COALITION_SAMS_STATE",  -- コアリション限定
     RELOAD_SAM = "RELOAD_SAM",
     RELOCATE_SAM = "RELOCATE_SAM",
 
@@ -50,8 +72,36 @@ IADS_WEB_IMPORT.COMMAND_TYPES = {
     ACTIVATE_DECOY = "ACTIVATE_DECOY",
     DEACTIVATE_DECOY = "DEACTIVATE_DECOY",
 
+    -- マルチプレイヤー/コアリション
+    BROADCAST_MESSAGE = "BROADCAST_MESSAGE",  -- 全体メッセージ
+    COALITION_MESSAGE = "COALITION_MESSAGE",  -- コアリションメッセージ
+    REQUEST_SYNC = "REQUEST_SYNC",  -- 同期リクエスト
+
     -- カスタム
     CUSTOM = "CUSTOM"
+}
+
+-- コマンド必要アクセスレベル
+IADS_WEB_IMPORT.COMMAND_ACCESS = {
+    SET_SAM_STATE = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    SET_ALL_SAMS_STATE = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    SET_COALITION_SAMS_STATE = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    RELOAD_SAM = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    RELOCATE_SAM = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    SET_DEFCON = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    SET_TACTICAL_MODE = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    SET_EMCON = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    SET_COMMANDER_ENABLED = IADS_WEB_IMPORT.ACCESS_LEVEL.ADMIN,
+    SET_COMMANDER_AGGRESSION = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    LINK_SAM_EWR = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    UNLINK_SAM_EWR = IADS_WEB_IMPORT.ACCESS_LEVEL.COMMANDER,
+    DEPLOY_DECOY = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    ACTIVATE_DECOY = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    DEACTIVATE_DECOY = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    BROADCAST_MESSAGE = IADS_WEB_IMPORT.ACCESS_LEVEL.ADMIN,
+    COALITION_MESSAGE = IADS_WEB_IMPORT.ACCESS_LEVEL.OPERATOR,
+    REQUEST_SYNC = IADS_WEB_IMPORT.ACCESS_LEVEL.VIEW,
+    CUSTOM = IADS_WEB_IMPORT.ACCESS_LEVEL.ADMIN
 }
 
 -- SAM状態
@@ -93,6 +143,10 @@ function IADS_WEB_IMPORT:new(config)
     self.errorCount = 0
     self.lastError = nil
     self.commandHandlers = {}
+
+    -- マルチプレイヤー用セッション管理
+    self.sessions = {}  -- セッションID -> セッション情報
+    self.commandLog = {}  -- コマンド履歴
 
     -- デフォルトハンドラ登録
     self:registerDefaultHandlers()
@@ -215,8 +269,14 @@ function IADS_WEB_IMPORT:processCommands(data)
     local commands = data.commands or {}
     local results = {}
 
-    env.info(string.format("[IADS_WEB_IMPORT] Processing command batch: %s (%d commands)",
-        commandId, #commands))
+    -- セッション情報取得
+    local sessionId = data.sessionId
+    local session = self:getSession(sessionId)
+    local coalition = data.coalition or (session and session.coalition) or IADS_WEB_IMPORT.COALITION.NEUTRAL
+    local accessLevel = data.accessLevel or (session and session.accessLevel) or IADS_WEB_IMPORT.ACCESS_LEVEL.VIEW
+
+    env.info(string.format("[IADS_WEB_IMPORT] Processing command batch: %s (%d commands) [coalition=%d, access=%d]",
+        commandId, #commands, coalition, accessLevel))
 
     local processedCount = 0
     for i, cmd in ipairs(commands) do
@@ -225,24 +285,82 @@ function IADS_WEB_IMPORT:processCommands(data)
             break
         end
 
-        local success, result = self:executeCommand(cmd)
-        results[i] = {
-            type = cmd.type,
-            success = success,
-            result = result
-        }
+        -- コアリションとアクセスレベルを注入
+        cmd._coalition = coalition
+        cmd._accessLevel = accessLevel
+        cmd._sessionId = sessionId
 
-        if success then
-            self.commandsProcessed = self.commandsProcessed + 1
-        else
+        -- 認可チェック
+        local authorized, authError = self:checkAuthorization(cmd, coalition, accessLevel)
+        if not authorized then
+            results[i] = {
+                type = cmd.type,
+                success = false,
+                result = authError
+            }
             self.errorCount = self.errorCount + 1
+        else
+            local success, result = self:executeCommand(cmd)
+            results[i] = {
+                type = cmd.type,
+                success = success,
+                result = result
+            }
+
+            if success then
+                self.commandsProcessed = self.commandsProcessed + 1
+                -- コマンドログ記録
+                if self.config.logCommandSource then
+                    self:logCommand(cmd, coalition, sessionId, result)
+                end
+            else
+                self.errorCount = self.errorCount + 1
+            end
         end
 
         processedCount = processedCount + 1
     end
 
     -- レスポンス送信
-    self:sendResponse(commandId, true, results)
+    self:sendResponse(commandId, true, results, coalition)
+end
+
+function IADS_WEB_IMPORT:checkAuthorization(cmd, coalition, accessLevel)
+    local cmdType = cmd.type
+
+    -- アクセスレベルチェック
+    local requiredLevel = IADS_WEB_IMPORT.COMMAND_ACCESS[cmdType]
+    if requiredLevel and accessLevel < requiredLevel then
+        return false, string.format("Insufficient access level (required: %d, have: %d)", requiredLevel, accessLevel)
+    end
+
+    -- コアリション制限チェック
+    if self.config.enforceCoalition and coalition ~= IADS_WEB_IMPORT.COALITION.ALL then
+        -- SAM操作時、対象SAMのコアリションをチェック
+        if cmd.samName then
+            local samCoalition = self:getSAMCoalition(cmd.samName)
+            if samCoalition and samCoalition ~= coalition then
+                return false, "Cannot control enemy coalition SAM"
+            end
+        end
+    end
+
+    return true, nil
+end
+
+function IADS_WEB_IMPORT:getSAMCoalition(samName)
+    if IADS_SYSTEMS and IADS_SYSTEMS.network and IADS_SYSTEMS.network.samSites then
+        local site = IADS_SYSTEMS.network.samSites[samName]
+        if site then
+            if site.coalition then
+                return site.coalition
+            end
+            if site.group and site.group:isExist() then
+                return site.group:getCoalition()
+            end
+        end
+    end
+    return nil
 end
 
 function IADS_WEB_IMPORT:executeCommand(cmd)
@@ -322,14 +440,40 @@ function IADS_WEB_IMPORT:registerDefaultHandlers()
     -- SET_ALL_SAMS_STATE
     self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.SET_ALL_SAMS_STATE] = function(self, cmd)
         local newState = cmd.state
+        local cmdCoalition = cmd._coalition
 
         if IADS_SYSTEMS and IADS_SYSTEMS.network then
             local count = 0
-            for name, _ in pairs(IADS_SYSTEMS.network.samSites) do
-                IADS_SYSTEMS.network:setSAMState(name, newState)
-                count = count + 1
+            for name, site in pairs(IADS_SYSTEMS.network.samSites) do
+                -- コアリション制限がある場合、自コアリションのみ
+                local samCoal = self:getSAMCoalition(name)
+                if cmdCoalition == IADS_WEB_IMPORT.COALITION.ALL or samCoal == cmdCoalition then
+                    IADS_SYSTEMS.network:setSAMState(name, newState)
+                    count = count + 1
+                end
             end
-            env.info(string.format("[IADS_WEB_IMPORT] All SAMs (%d) state set to %s", count, newState))
+            env.info(string.format("[IADS_WEB_IMPORT] SAMs (%d) state set to %s (coalition=%d)", count, newState, cmdCoalition))
+            return string.format("%d SAMs set to %s", count, newState)
+        else
+            error("IADS network not available")
+        end
+    end
+
+    -- SET_COALITION_SAMS_STATE (明示的なコアリション指定)
+    self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.SET_COALITION_SAMS_STATE] = function(self, cmd)
+        local newState = cmd.state
+        local targetCoalition = cmd.targetCoalition or cmd._coalition
+
+        if IADS_SYSTEMS and IADS_SYSTEMS.network then
+            local count = 0
+            for name, site in pairs(IADS_SYSTEMS.network.samSites) do
+                local samCoal = self:getSAMCoalition(name)
+                if samCoal == targetCoalition then
+                    IADS_SYSTEMS.network:setSAMState(name, newState)
+                    count = count + 1
+                end
+            end
+            env.info(string.format("[IADS_WEB_IMPORT] Coalition %d SAMs (%d) state set to %s", targetCoalition, count, newState))
             return string.format("%d SAMs set to %s", count, newState)
         else
             error("IADS network not available")
@@ -430,6 +574,46 @@ function IADS_WEB_IMPORT:registerDefaultHandlers()
         end
     end
 
+    -- BROADCAST_MESSAGE (全体メッセージ)
+    self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.BROADCAST_MESSAGE] = function(self, cmd)
+        local message = cmd.message
+        local duration = cmd.duration or 10
+
+        if message and trigger and trigger.action then
+            trigger.action.outText(message, duration)
+            env.info(string.format("[IADS_WEB_IMPORT] Broadcast message: %s", message))
+            return "Message broadcast"
+        else
+            error("Cannot broadcast message")
+        end
+    end
+
+    -- COALITION_MESSAGE (コアリションメッセージ)
+    self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.COALITION_MESSAGE] = function(self, cmd)
+        local message = cmd.message
+        local duration = cmd.duration or 10
+        local targetCoalition = cmd.targetCoalition or cmd._coalition
+
+        if message and trigger and trigger.action then
+            trigger.action.outTextForCoalition(targetCoalition, message, duration)
+            env.info(string.format("[IADS_WEB_IMPORT] Coalition %d message: %s", targetCoalition, message))
+            return "Message sent to coalition"
+        else
+            error("Cannot send coalition message")
+        end
+    end
+
+    -- REQUEST_SYNC (同期リクエスト - 即座にエクスポートを実行)
+    self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.REQUEST_SYNC] = function(self, cmd)
+        if IADS_SYSTEMS and IADS_SYSTEMS.webExport then
+            IADS_SYSTEMS.webExport:doExport()
+            env.info("[IADS_WEB_IMPORT] Sync requested, export triggered")
+            return "Sync completed"
+        else
+            error("Web export system not available")
+        end
+    end
+
     -- CUSTOM
     self.commandHandlers[IADS_WEB_IMPORT.COMMAND_TYPES.CUSTOM] = function(self, cmd)
         local customFunc = cmd.func
@@ -454,14 +638,96 @@ function IADS_WEB_IMPORT:registerHandler(commandType, handler)
 end
 
 --------------------------------------------------------------------------------
+-- セッション管理
+--------------------------------------------------------------------------------
+function IADS_WEB_IMPORT:getSession(sessionId)
+    if not sessionId then return nil end
+    return self.sessions[sessionId]
+end
+
+function IADS_WEB_IMPORT:createSession(sessionId, coalition, accessLevel, playerName)
+    local session = {
+        id = sessionId,
+        coalition = coalition or IADS_WEB_IMPORT.COALITION.NEUTRAL,
+        accessLevel = accessLevel or IADS_WEB_IMPORT.ACCESS_LEVEL.VIEW,
+        playerName = playerName or "Unknown",
+        createdAt = timer.getTime(),
+        lastActivity = timer.getTime(),
+        commandCount = 0
+    }
+    self.sessions[sessionId] = session
+    env.info(string.format("[IADS_WEB_IMPORT] Session created: %s (coalition=%d, access=%d, player=%s)",
+        sessionId, session.coalition, session.accessLevel, session.playerName))
+    return session
+end
+
+function IADS_WEB_IMPORT:updateSession(sessionId, updates)
+    local session = self.sessions[sessionId]
+    if session then
+        for k, v in pairs(updates) do
+            session[k] = v
+        end
+        session.lastActivity = timer.getTime()
+        return session
+    end
+    return nil
+end
+
+function IADS_WEB_IMPORT:destroySession(sessionId)
+    if self.sessions[sessionId] then
+        env.info(string.format("[IADS_WEB_IMPORT] Session destroyed: %s", sessionId))
+        self.sessions[sessionId] = nil
+        return true
+    end
+    return false
+end
+
+function IADS_WEB_IMPORT:logCommand(cmd, coalition, sessionId, result)
+    local logEntry = {
+        timestamp = timer.getTime(),
+        commandType = cmd.type,
+        coalition = coalition,
+        sessionId = sessionId,
+        target = cmd.samName or cmd.decoyId or nil,
+        result = result
+    }
+    table.insert(self.commandLog, logEntry)
+
+    -- ログサイズ制限（最新1000件）
+    while #self.commandLog > 1000 do
+        table.remove(self.commandLog, 1)
+    end
+end
+
+function IADS_WEB_IMPORT:getCommandLog(coalition, limit)
+    local result = {}
+    local count = 0
+    limit = limit or 100
+
+    -- 新しい順に取得
+    for i = #self.commandLog, 1, -1 do
+        if count >= limit then break end
+        local entry = self.commandLog[i]
+        -- コアリションフィルタ
+        if coalition == IADS_WEB_IMPORT.COALITION.ALL or entry.coalition == coalition then
+            table.insert(result, entry)
+            count = count + 1
+        end
+    end
+
+    return result
+end
+
+--------------------------------------------------------------------------------
 -- レスポンス送信
 --------------------------------------------------------------------------------
-function IADS_WEB_IMPORT:sendResponse(commandId, success, data)
+function IADS_WEB_IMPORT:sendResponse(commandId, success, data, coalition)
     local response = {
         commandId = commandId,
         timestamp = timer.getTime(),
         success = success,
-        data = data
+        data = data,
+        coalition = coalition or IADS_WEB_IMPORT.COALITION.NEUTRAL
     }
 
     local json = self:toJSON(response)

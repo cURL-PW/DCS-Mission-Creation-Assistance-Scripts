@@ -1,13 +1,24 @@
-import { IADSState, SAMSite, SAMState, DEFCONLevel, TacticalMode, Threat } from '../types/iads';
+import { IADSState, SAMSite, SAMState, DEFCONLevel, TacticalMode, Threat, Coalition, AccessLevel, MultiplayerInfo, CoalitionData } from '../types/iads';
+import { useSessionStore } from '../store/iadsStore';
 
 const API_BASE = '/api';
 
+// セッションIDを取得するヘルパー
+function getSessionId(): string | null {
+  return useSessionStore.getState().getSessionId();
+}
+
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const sessionId = getSessionId();
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+    ...(sessionId ? { 'X-Session-Id': sessionId } : {}),
+    ...options?.headers,
+  };
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
     ...options,
+    headers,
   });
 
   if (!response.ok) {
@@ -16,6 +27,45 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
   }
 
   return response.json();
+}
+
+// ========== セッション ==========
+
+export interface SessionResponse {
+  sessionId: string;
+  coalition: Coalition;
+  accessLevel: AccessLevel;
+  playerName: string;
+  expiresIn?: number;
+}
+
+export async function createSession(
+  coalition: Coalition,
+  playerName?: string,
+  accessLevel?: AccessLevel
+): Promise<SessionResponse> {
+  return fetchAPI('/session', {
+    method: 'POST',
+    body: JSON.stringify({ coalition, playerName, accessLevel }),
+  });
+}
+
+export async function getSession(): Promise<SessionResponse> {
+  return fetchAPI('/session');
+}
+
+export async function deleteSession(): Promise<{ success: boolean }> {
+  return fetchAPI('/session', { method: 'DELETE' });
+}
+
+// ========== マルチプレイヤー ==========
+
+export async function getMultiplayerInfo(): Promise<MultiplayerInfo> {
+  return fetchAPI('/multiplayer');
+}
+
+export async function getCoalitionData(coalitionId: Coalition): Promise<CoalitionData & { coalition: number; coalitionName: string }> {
+  return fetchAPI(`/coalition/${coalitionId}`);
 }
 
 // ========== ステータス ==========
@@ -36,13 +86,14 @@ export async function getFullState(): Promise<IADSState> {
 
 // ========== SAMサイト ==========
 
-export async function getSAMs(filters?: { state?: SAMState; type?: string }): Promise<{
+export async function getSAMs(filters?: { state?: SAMState; type?: string; coalition?: Coalition }): Promise<{
   count: number;
   sams: SAMSite[];
 }> {
   const params = new URLSearchParams();
   if (filters?.state) params.set('state', filters.state);
   if (filters?.type) params.set('type', filters.type);
+  if (filters?.coalition !== undefined) params.set('coalition', String(filters.coalition));
 
   const query = params.toString();
   return fetchAPI(`/sams${query ? `?${query}` : ''}`);

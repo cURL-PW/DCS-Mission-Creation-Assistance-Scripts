@@ -21,6 +21,24 @@ export interface SAMSite {
   isActive: boolean;
   lastEngagement: number | null;
   linkedEWRs: string[];
+  coalition: Coalition;
+}
+
+// コアリション定義
+export enum Coalition {
+  NEUTRAL = 0,
+  RED = 1,
+  BLUE = 2,
+  ALL = -1
+}
+
+// アクセスレベル
+export enum AccessLevel {
+  NONE = 0,
+  VIEW = 1,
+  OPERATOR = 2,
+  COMMANDER = 3,
+  ADMIN = 4
 }
 
 export interface EWRSite {
@@ -30,6 +48,7 @@ export interface EWRSite {
   range: number;
   isActive: boolean;
   detectedThreats: number;
+  coalition: Coalition;
 }
 
 export type ThreatCategory = 'AIR' | 'SURFACE' | 'SUBSURFACE';
@@ -47,6 +66,51 @@ export interface Threat {
   threatLevel: ThreatLevel;
   firstDetected: number;
   lastSeen: number;
+  coalition: Coalition;
+}
+
+// マルチプレイヤー情報
+export interface Player {
+  id: number;
+  name: string;
+  coalition: Coalition;
+  slot: string;
+  ping: number;
+}
+
+export interface CoalitionInfo {
+  name: string;
+  playerCount: number;
+}
+
+export interface MultiplayerInfo {
+  isMultiplayer: boolean;
+  isServer: boolean;
+  serverName: string;
+  players: Player[];
+  coalitions: {
+    red: CoalitionInfo;
+    blue: CoalitionInfo;
+    neutral?: CoalitionInfo;
+  };
+}
+
+// コアリション別データ
+export interface CoalitionData {
+  samSites: Record<string, SAMSite>;
+  ewrSites: Record<string, EWRSite>;
+  threats: Record<string, Threat>;
+  statistics: Statistics;
+}
+
+// セッション
+export interface Session {
+  id: string;
+  coalition: Coalition;
+  accessLevel: AccessLevel;
+  playerName: string;
+  createdAt: number;
+  lastActivity: number;
 }
 
 export interface Statistics {
@@ -73,6 +137,11 @@ export interface IADSState {
   ewrSites: Record<string, EWRSite>;
   threats: Record<string, Threat>;
   statistics: Statistics;
+  multiplayer: MultiplayerInfo;
+  coalitionData: {
+    red: CoalitionData;
+    blue: CoalitionData;
+  };
 }
 
 // コマンド関連の型定義
@@ -80,6 +149,7 @@ export interface IADSState {
 export type CommandType =
   | 'SET_SAM_STATE'
   | 'SET_ALL_SAMS_STATE'
+  | 'SET_COALITION_SAMS_STATE'
   | 'RELOAD_SAM'
   | 'RELOCATE_SAM'
   | 'SET_DEFCON'
@@ -92,6 +162,9 @@ export type CommandType =
   | 'DEPLOY_DECOY'
   | 'ACTIVATE_DECOY'
   | 'DEACTIVATE_DECOY'
+  | 'BROADCAST_MESSAGE'
+  | 'COALITION_MESSAGE'
+  | 'REQUEST_SYNC'
   | 'CUSTOM';
 
 export interface BaseCommand {
@@ -155,6 +228,9 @@ export interface CommandBatch {
   commandId: string;
   timestamp: number;
   commands: Command[];
+  sessionId?: string;
+  coalition?: Coalition;
+  accessLevel?: AccessLevel;
 }
 
 export interface CommandResult {

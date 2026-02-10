@@ -21,9 +21,18 @@ IADS_WEB_EXPORT.DEFAULT_CONFIG = {
     includeThreats = true,
     includeStatistics = true,
     includeEWR = true,
+    includePlayers = true,  -- マルチプレイヤー情報
+    includeCoalitionData = true,  -- コアリション別データ
     prettyPrint = false,  -- JSONを整形するか（デバッグ用）
     maxThreats = 50,  -- 最大脅威数
     positionPrecision = 2  -- 座標の小数点以下桁数
+}
+
+-- コアリション定数
+IADS_WEB_EXPORT.COALITION = {
+    NEUTRAL = 0,
+    RED = 1,
+    BLUE = 2
 }
 
 -- 状態定数
@@ -175,8 +184,29 @@ function IADS_WEB_EXPORT:collectData()
         samSites = {},
         ewrSites = {},
         threats = {},
-        statistics = {}
+        statistics = {},
+        -- マルチプレイヤー情報
+        multiplayer = {
+            isMultiplayer = false,
+            isServer = false,
+            serverName = "",
+            players = {},
+            coalitions = {
+                red = { name = "Red", playerCount = 0 },
+                blue = { name = "Blue", playerCount = 0 }
+            }
+        },
+        -- コアリション別データ
+        coalitionData = {
+            red = { samSites = {}, ewrSites = {}, threats = {}, statistics = {} },
+            blue = { samSites = {}, ewrSites = {}, threats = {}, statistics = {} }
+        }
     }
+
+    -- マルチプレイヤー情報収集
+    if self.config.includePlayers then
+        data.multiplayer = self:collectMultiplayerData()
+    end
 
     -- グローバルIADSシステムからデータ収集
     if IADS_SYSTEMS then
@@ -203,6 +233,11 @@ function IADS_WEB_EXPORT:collectData()
         if self.config.includeStatistics then
             data.statistics = self:collectStatistics()
         end
+
+        -- コアリション別データ収集
+        if self.config.includeCoalitionData then
+            data.coalitionData = self:collectCoalitionData()
+        end
     end
 
     return data
@@ -224,7 +259,8 @@ function IADS_WEB_EXPORT:collectSAMData()
                 health = 100,
                 isActive = site.state == "GREEN" or site.state == "TRACKING",
                 lastEngagement = nil,
-                linkedEWRs = {}
+                linkedEWRs = {},
+                coalition = self:getSiteCoalition(site)  -- コアリション情報追加
             }
 
             -- 弾薬管理システムからデータ取得
@@ -271,7 +307,8 @@ function IADS_WEB_EXPORT:collectEWRData()
                 position = self:formatPosition(site.position),
                 range = site.range or 0,
                 isActive = site.isActive ~= false,
-                detectedThreats = 0
+                detectedThreats = 0,
+                coalition = self:getSiteCoalition(site)  -- コアリション情報追加
             }
         end
     end
@@ -301,7 +338,8 @@ function IADS_WEB_EXPORT:collectThreatData()
                 isSEAD = threat.isSEAD or false,
                 threatLevel = threat.threatLevel or "LOW",
                 firstDetected = threat.firstDetected,
-                lastSeen = threat.lastSeen or timer.getTime()
+                lastSeen = threat.lastSeen or timer.getTime(),
+                coalition = threat.coalition or 0  -- 脅威のコアリション
             }
 
             threats[trackId] = threatData
@@ -358,6 +396,220 @@ function IADS_WEB_EXPORT:collectStatistics()
     end
 
     return stats
+end
+
+--------------------------------------------------------------------------------
+-- マルチプレイヤー/コアリションデータ収集
+--------------------------------------------------------------------------------
+function IADS_WEB_EXPORT:collectMultiplayerData()
+    local mpData = {
+        isMultiplayer = false,
+        isServer = false,
+        serverName = "",
+        players = {},
+        coalitions = {
+            red = { name = "Red", playerCount = 0 },
+            blue = { name = "Blue", playerCount = 0 },
+            neutral = { name = "Neutral", playerCount = 0 }
+        }
+    }
+
+    -- DCS APIでマルチプレイヤー状態を確認
+    if net and net.get_server_info then
+        local serverInfo = net.get_server_info()
+        if serverInfo then
+            mpData.isMultiplayer = true
+            mpData.serverName = serverInfo.name or ""
+        end
+    end
+
+    -- ホスト/サーバー判定
+    if DCS and DCS.isServer then
+        mpData.isServer = DCS.isServer()
+    end
+
+    -- プレイヤー情報収集
+    if net and net.get_player_list then
+        local playerList = net.get_player_list()
+        if playerList then
+            for _, playerId in ipairs(playerList) do
+                local info = net.get_player_info(playerId)
+                if info then
+                    local playerData = {
+                        id = playerId,
+                        name = info.name or "Unknown",
+                        coalition = info.side or 0,
+                        slot = info.slot or "",
+                        ping = info.ping or 0,
+                        ipaddr = nil  -- セキュリティのため除外
+                    }
+                    table.insert(mpData.players, playerData)
+
+                    -- コアリション別カウント
+                    if info.side == 1 then
+                        mpData.coalitions.red.playerCount = mpData.coalitions.red.playerCount + 1
+                    elseif info.side == 2 then
+                        mpData.coalitions.blue.playerCount = mpData.coalitions.blue.playerCount + 1
+                    else
+                        mpData.coalitions.neutral.playerCount = mpData.coalitions.neutral.playerCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return mpData
+end
+
+function IADS_WEB_EXPORT:getSiteCoalition(site)
+    -- サイトのコアリションを取得
+    if site.coalition then
+        return site.coalition
+    end
+
+    -- DCSグループからコアリション取得を試みる
+    if site.group and site.group:isExist() then
+        return site.group:getCoalition()
+    end
+
+    -- SAM名からコアリションを推測（フォールバック）
+    if site.name then
+        local name = string.lower(site.name)
+        if string.find(name, "red") or string.find(name, "enemy") then
+            return IADS_WEB_EXPORT.COALITION.RED
+        elseif string.find(name, "blue") or string.find(name, "friendly") then
+            return IADS_WEB_EXPORT.COALITION.BLUE
+        end
+    end
+
+    return IADS_WEB_EXPORT.COALITION.NEUTRAL
+end
+
+function IADS_WEB_EXPORT:collectCoalitionData()
+    local coalitionData = {
+        red = { samSites = {}, ewrSites = {}, threats = {}, statistics = self:createEmptyStats() },
+        blue = { samSites = {}, ewrSites = {}, threats = {}, statistics = self:createEmptyStats() }
+    }
+
+    -- SAMサイトをコアリション別に分類
+    if IADS_SYSTEMS.network and IADS_SYSTEMS.network.samSites then
+        for name, site in pairs(IADS_SYSTEMS.network.samSites) do
+            local coalition = self:getSiteCoalition(site)
+            local samData = self:formatSAMForCoalition(name, site)
+
+            if coalition == IADS_WEB_EXPORT.COALITION.RED then
+                coalitionData.red.samSites[name] = samData
+                self:updateCoalitionSAMStats(coalitionData.red.statistics, site)
+            elseif coalition == IADS_WEB_EXPORT.COALITION.BLUE then
+                coalitionData.blue.samSites[name] = samData
+                self:updateCoalitionSAMStats(coalitionData.blue.statistics, site)
+            end
+        end
+    end
+
+    -- EWRサイトをコアリション別に分類
+    if IADS_SYSTEMS.network and IADS_SYSTEMS.network.ewrSites then
+        for name, site in pairs(IADS_SYSTEMS.network.ewrSites) do
+            local coalition = self:getSiteCoalition(site)
+            local ewrData = {
+                name = name,
+                type = site.type or "EWR",
+                position = self:formatPosition(site.position),
+                range = site.range or 0,
+                isActive = site.isActive ~= false
+            }
+
+            if coalition == IADS_WEB_EXPORT.COALITION.RED then
+                coalitionData.red.ewrSites[name] = ewrData
+                coalitionData.red.statistics.totalEWRs = coalitionData.red.statistics.totalEWRs + 1
+            elseif coalition == IADS_WEB_EXPORT.COALITION.BLUE then
+                coalitionData.blue.ewrSites[name] = ewrData
+                coalitionData.blue.statistics.totalEWRs = coalitionData.blue.statistics.totalEWRs + 1
+            end
+        end
+    end
+
+    -- 脅威をコアリション別に分類（脅威は敵コアリションからの視点）
+    if IADS_SYSTEMS.network and IADS_SYSTEMS.network.trackedThreats then
+        for trackId, threat in pairs(IADS_SYSTEMS.network.trackedThreats) do
+            local threatCoal = threat.coalition or 0
+            local threatData = {
+                id = trackId,
+                type = threat.type or "UNKNOWN",
+                category = threat.category or "AIR",
+                position = self:formatPosition(threat.position),
+                heading = threat.heading or 0,
+                speed = threat.speed or 0,
+                altitude = threat.altitude or 0,
+                isSEAD = threat.isSEAD or false,
+                threatLevel = threat.threatLevel or "LOW"
+            }
+
+            -- 脅威は敵側に記録（Redの脅威はBlueのデータに、その逆も）
+            if threatCoal == IADS_WEB_EXPORT.COALITION.RED then
+                coalitionData.blue.threats[trackId] = threatData
+                coalitionData.blue.statistics.activeThreats = coalitionData.blue.statistics.activeThreats + 1
+            elseif threatCoal == IADS_WEB_EXPORT.COALITION.BLUE then
+                coalitionData.red.threats[trackId] = threatData
+                coalitionData.red.statistics.activeThreats = coalitionData.red.statistics.activeThreats + 1
+            end
+        end
+    end
+
+    return coalitionData
+end
+
+function IADS_WEB_EXPORT:formatSAMForCoalition(name, site)
+    local samData = {
+        name = name,
+        state = site.state or "UNKNOWN",
+        type = site.type or "UNKNOWN",
+        position = self:formatPosition(site.position),
+        range = site.range or 0,
+        ammo = 100,
+        health = 100,
+        isActive = site.state == "GREEN" or site.state == "TRACKING"
+    }
+
+    -- 弾薬情報
+    if IADS_SYSTEMS.ammo and IADS_SYSTEMS.ammo.samAmmo then
+        local ammoData = IADS_SYSTEMS.ammo.samAmmo[name]
+        if ammoData then
+            samData.ammo = math.floor((ammoData.current / ammoData.max) * 100)
+        end
+    end
+
+    -- ヘルス情報
+    if IADS_SYSTEMS.maintenance and IADS_SYSTEMS.maintenance.samStatus then
+        local status = IADS_SYSTEMS.maintenance.samStatus[name]
+        if status then
+            samData.health = math.floor(status.health or 100)
+        end
+    end
+
+    return samData
+end
+
+function IADS_WEB_EXPORT:createEmptyStats()
+    return {
+        totalSAMs = 0,
+        activeSAMs = 0,
+        darkSAMs = 0,
+        totalEWRs = 0,
+        activeThreats = 0,
+        missilesRemaining = 0,
+        missilesFired = 0,
+        kills = 0
+    }
+end
+
+function IADS_WEB_EXPORT:updateCoalitionSAMStats(stats, site)
+    stats.totalSAMs = stats.totalSAMs + 1
+    if site.state == "GREEN" or site.state == "TRACKING" or site.state == "ENGAGING" then
+        stats.activeSAMs = stats.activeSAMs + 1
+    elseif site.state == "DARK" then
+        stats.darkSAMs = stats.darkSAMs + 1
+    end
 end
 
 --------------------------------------------------------------------------------

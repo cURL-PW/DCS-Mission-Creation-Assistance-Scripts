@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { IADSState, SAMSite, Threat, DEFCONLevel, TacticalMode } from '../types/iads';
+import { persist } from 'zustand/middleware';
+import { IADSState, SAMSite, Threat, Session, Coalition, AccessLevel } from '../types/iads';
 
 interface IADSStore {
   // 状態
@@ -66,6 +67,59 @@ export const useIADSStore = create<IADSStore>((set, get) => ({
   }
 }));
 
+// セッションストア（永続化）
+interface SessionStore {
+  session: Session | null;
+  isLoggedIn: boolean;
+
+  login: (session: Session) => void;
+  logout: () => void;
+  getSessionId: () => string | null;
+  getCoalition: () => Coalition;
+  getAccessLevel: () => AccessLevel;
+  canControl: () => boolean;
+  isGameMaster: () => boolean;
+}
+
+export const useSessionStore = create<SessionStore>()(
+  persist(
+    (set, get) => ({
+      session: null,
+      isLoggedIn: false,
+
+      login: (session: Session) => set({
+        session,
+        isLoggedIn: true
+      }),
+
+      logout: () => set({
+        session: null,
+        isLoggedIn: false
+      }),
+
+      getSessionId: () => get().session?.id || null,
+
+      getCoalition: () => get().session?.coalition ?? Coalition.NEUTRAL,
+
+      getAccessLevel: () => get().session?.accessLevel ?? AccessLevel.NONE,
+
+      canControl: () => {
+        const level = get().session?.accessLevel ?? AccessLevel.NONE;
+        return level >= AccessLevel.OPERATOR;
+      },
+
+      isGameMaster: () => {
+        const session = get().session;
+        return session?.coalition === Coalition.ALL && session?.accessLevel >= AccessLevel.ADMIN;
+      }
+    }),
+    {
+      name: 'iads-session',
+      partialize: (state) => ({ session: state.session, isLoggedIn: state.isLoggedIn })
+    }
+  )
+);
+
 // UI状態用のストア
 interface UIStore {
   selectedSAM: string | null;
@@ -75,6 +129,7 @@ interface UIStore {
   showRangeCircles: boolean;
   showThreats: boolean;
   showEWRs: boolean;
+  showEnemyUnits: boolean;  // 敵ユニット表示（GMモード用）
 
   setSelectedSAM: (name: string | null) => void;
   setSelectedThreat: (id: string | null) => void;
@@ -82,6 +137,7 @@ interface UIStore {
   toggleRangeCircles: () => void;
   toggleThreats: () => void;
   toggleEWRs: () => void;
+  toggleEnemyUnits: () => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
@@ -92,11 +148,13 @@ export const useUIStore = create<UIStore>((set) => ({
   showRangeCircles: true,
   showThreats: true,
   showEWRs: true,
+  showEnemyUnits: false,
 
   setSelectedSAM: (name) => set({ selectedSAM: name }),
   setSelectedThreat: (id) => set({ selectedThreat: id }),
   setMapView: (center, zoom) => set({ mapCenter: center, mapZoom: zoom }),
   toggleRangeCircles: () => set((state) => ({ showRangeCircles: !state.showRangeCircles })),
   toggleThreats: () => set((state) => ({ showThreats: !state.showThreats })),
-  toggleEWRs: () => set((state) => ({ showEWRs: !state.showEWRs }))
+  toggleEWRs: () => set((state) => ({ showEWRs: !state.showEWRs })),
+  toggleEnemyUnits: () => set((state) => ({ showEnemyUnits: !state.showEnemyUnits }))
 }));

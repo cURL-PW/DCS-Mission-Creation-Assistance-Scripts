@@ -1,5 +1,6 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { DCSFileWatcher } from '../dcs/fileWatcher';
+import { sessionManager } from './sessionManager';
 import {
   SAMState,
   DEFCONLevel,
@@ -8,11 +9,186 @@ import {
   SetAllSAMsStateCommand,
   SetDEFCONCommand,
   SetTacticalModeCommand,
-  Command
+  Command,
+  Coalition,
+  AccessLevel,
+  Session
 } from '../types/iads';
+
+// セッション付きリクエスト型
+interface AuthenticatedRequest extends Request {
+  session?: Session;
+}
 
 export function createApiRouter(dcsWatcher: DCSFileWatcher): Router {
   const router = Router();
+
+  // ========== セッション/認証 ==========
+
+  /**
+   * POST /api/session
+   * 新規セッション作成（ログイン）
+   */
+  router.post('/session', (req: Request, res: Response) => {
+    const { coalition, playerName, accessLevel } = req.body as {
+      coalition: Coalition;
+      playerName?: string;
+      accessLevel?: AccessLevel;
+    };
+
+    if (coalition === undefined || ![Coalition.RED, Coalition.BLUE, Coalition.NEUTRAL, Coalition.ALL].includes(coalition)) {
+      return res.status(400).json({
+        error: 'Invalid coalition',
+        validCoalitions: ['RED (1)', 'BLUE (2)', 'NEUTRAL (0)', 'ALL (-1, for Game Master)']
+      });
+    }
+
+    const session = sessionManager.createSession(
+      coalition,
+      accessLevel || AccessLevel.OPERATOR,
+      playerName || 'Anonymous'
+    );
+
+    res.json({
+      sessionId: session.id,
+      coalition: session.coalition,
+      accessLevel: session.accessLevel,
+      playerName: session.playerName,
+      expiresIn: 30 * 60 * 1000 // 30分
+    });
+  });
+
+  /**
+   * GET /api/session
+   * 現在のセッション情報取得
+   */
+  router.get('/session', (req: Request, res: Response) => {
+    const sessionId = req.headers['x-session-id'] as string;
+
+    if (!sessionId) {
+      return res.status(401).json({ error: 'No session ID provided' });
+    }
+
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    res.json({
+      sessionId: session.id,
+      coalition: session.coalition,
+      accessLevel: session.accessLevel,
+      playerName: session.playerName,
+      createdAt: session.createdAt
+    });
+  });
+
+  /**
+   * DELETE /api/session
+   * セッション削除（ログアウト）
+   */
+  router.delete('/session', (req: Request, res: Response) => {
+    const sessionId = req.headers['x-session-id'] as string;
+
+    if (!sessionId) {
+      return res.status(401).json({ error: 'No session ID provided' });
+    }
+
+    const destroyed = sessionManager.destroySession(sessionId);
+    res.json({ success: destroyed });
+  });
+
+  /**
+   * GET /api/sessions
+   * 全セッション一覧（管理者用）
+   */
+  router.get('/sessions', (req: Request, res: Response) => {
+    const sessionId = req.headers['x-session-id'] as string;
+    const session = sessionManager.getSession(sessionId);
+
+    // 管理者権限チェック
+    if (!session || session.accessLevel < AccessLevel.ADMIN) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const sessions = sessionManager.getAllSessions();
+    res.json({
+      count: sessions.length,
+      sessions: sessions.map(s => ({
+        id: s.id,
+        coalition: s.coalition,
+        accessLevel: s.accessLevel,
+        playerName: s.playerName,
+        createdAt: s.createdAt,
+        lastActivity: s.lastActivity
+      }))
+    });
+  });
+
+  // ========== コアリション別データ ==========
+
+  /**
+   * GET /api/coalition/:id
+   * コアリション別のデータを取得
+   */
+  router.get('/coalition/:id', (req: Request, res: Response) => {
+    const state = dcsWatcher.getCurrentState();
+    if (!state) {
+      return res.status(503).json({ error: 'No state available' });
+    }
+
+    const coalitionId = parseInt(req.params.id, 10);
+    if (isNaN(coalitionId) || ![Coalition.RED, Coalition.BLUE].includes(coalitionId)) {
+      return res.status(400).json({
+        error: 'Invalid coalition ID',
+        validIds: ['1 (RED)', '2 (BLUE)']
+      });
+    }
+
+    // セッションのコアリションチェック
+    const sessionId = req.headers['x-session-id'] as string;
+    if (sessionId) {
+      const session = sessionManager.getSession(sessionId);
+      if (session && session.coalition !== Coalition.ALL && session.coalition !== coalitionId) {
+        return res.status(403).json({ error: 'Cannot access enemy coalition data' });
+      }
+    }
+
+    const coalitionKey = coalitionId === Coalition.RED ? 'red' : 'blue';
+    const coalitionData = state.coalitionData?.[coalitionKey];
+
+    if (!coalitionData) {
+      return res.status(404).json({ error: 'Coalition data not available' });
+    }
+
+    res.json({
+      coalition: coalitionId,
+      coalitionName: coalitionKey.toUpperCase(),
+      ...coalitionData
+    });
+  });
+
+  /**
+   * GET /api/multiplayer
+   * マルチプレイヤー情報を取得
+   */
+  router.get('/multiplayer', (req: Request, res: Response) => {
+    const state = dcsWatcher.getCurrentState();
+    if (!state) {
+      return res.status(503).json({ error: 'No state available' });
+    }
+
+    res.json(state.multiplayer || {
+      isMultiplayer: false,
+      isServer: false,
+      serverName: '',
+      players: [],
+      coalitions: {
+        red: { name: 'Red', playerCount: 0 },
+        blue: { name: 'Blue', playerCount: 0 }
+      }
+    });
+  });
 
   // ========== ステータス ==========
 
@@ -65,10 +241,19 @@ export function createApiRouter(dcsWatcher: DCSFileWatcher): Router {
       return res.status(503).json({ error: 'No state available' });
     }
 
-    const sams = Object.values(state.samSites);
+    let sams = Object.values(state.samSites);
 
-    // フィルタリング
-    const { state: stateFilter, type: typeFilter } = req.query;
+    // セッションによるコアリションフィルタリング
+    const sessionId = req.headers['x-session-id'] as string;
+    if (sessionId) {
+      const session = sessionManager.getSession(sessionId);
+      if (session && session.coalition !== Coalition.ALL) {
+        sams = sams.filter(s => s.coalition === session.coalition);
+      }
+    }
+
+    // クエリによるフィルタリング
+    const { state: stateFilter, type: typeFilter, coalition: coalitionFilter } = req.query;
     let filtered = sams;
 
     if (stateFilter) {
@@ -76,6 +261,12 @@ export function createApiRouter(dcsWatcher: DCSFileWatcher): Router {
     }
     if (typeFilter) {
       filtered = filtered.filter(s => s.type === typeFilter);
+    }
+    if (coalitionFilter) {
+      const coalId = parseInt(coalitionFilter as string, 10);
+      if (!isNaN(coalId)) {
+        filtered = filtered.filter(s => s.coalition === coalId);
+      }
     }
 
     res.json({

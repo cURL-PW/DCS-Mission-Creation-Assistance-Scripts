@@ -3,6 +3,7 @@ import cors from 'cors';
 import { DCSFileWatcher } from './dcs/fileWatcher';
 import { IADSWebSocketServer } from './websocket/wsServer';
 import { createApiRouter } from './api/routes';
+import { sessionManager } from './api/sessionManager';
 
 const API_PORT = parseInt(process.env.API_PORT || '3001', 10);
 const WS_PORT = parseInt(process.env.WS_PORT || '3002', 10);
@@ -24,9 +25,13 @@ async function main(): Promise<void> {
   app.use(cors({
     origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-Id'],
+    exposedHeaders: ['X-Session-Id']
   }));
   app.use(express.json());
+
+  // セッションマネージャー開始
+  sessionManager.start();
 
   // ルートエンドポイント
   app.get('/', (req, res) => {
@@ -45,6 +50,15 @@ async function main(): Promise<void> {
   app.get('/api/docs', (req, res) => {
     res.json({
       endpoints: [
+        // セッション
+        { method: 'POST', path: '/api/session', description: 'セッション作成（ログイン）' },
+        { method: 'GET', path: '/api/session', description: 'セッション情報取得' },
+        { method: 'DELETE', path: '/api/session', description: 'セッション削除（ログアウト）' },
+        { method: 'GET', path: '/api/sessions', description: '全セッション一覧（管理者用）' },
+        // コアリション
+        { method: 'GET', path: '/api/coalition/:id', description: 'コアリション別データ取得' },
+        { method: 'GET', path: '/api/multiplayer', description: 'マルチプレイヤー情報取得' },
+        // ステータス
         { method: 'GET', path: '/api/status', description: '全体ステータス取得' },
         { method: 'GET', path: '/api/state', description: '完全な状態データ取得' },
         { method: 'GET', path: '/api/sams', description: 'SAMサイト一覧' },
@@ -62,6 +76,10 @@ async function main(): Promise<void> {
         { method: 'POST', path: '/api/commands', description: '複数コマンド一括送信' },
         { method: 'GET', path: '/api/health', description: 'ヘルスチェック' }
       ],
+      authentication: {
+        header: 'X-Session-Id',
+        description: 'セッション作成後、全てのリクエストにX-Session-Idヘッダーを含めてください'
+      },
       websocket: {
         url: `ws://localhost:${WS_PORT}/ws`,
         events: [
@@ -118,6 +136,7 @@ async function main(): Promise<void> {
     console.log('\nShutting down...');
     dcsWatcher.stop();
     wsServer.stop();
+    sessionManager.stop();
     httpServer.close(() => {
       console.log('Server stopped');
       process.exit(0);

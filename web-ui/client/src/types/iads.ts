@@ -8,6 +8,23 @@ export interface Position {
   lon: number;
 }
 
+// コアリション定義
+export enum Coalition {
+  NEUTRAL = 0,
+  RED = 1,
+  BLUE = 2,
+  ALL = -1
+}
+
+// アクセスレベル
+export enum AccessLevel {
+  NONE = 0,
+  VIEW = 1,
+  OPERATOR = 2,
+  COMMANDER = 3,
+  ADMIN = 4
+}
+
 export type SAMState = 'GREEN' | 'DARK' | 'TRACKING' | 'ENGAGING' | 'DESTROYED' | 'UNKNOWN';
 
 export interface SAMSite {
@@ -21,6 +38,7 @@ export interface SAMSite {
   isActive: boolean;
   lastEngagement: number | null;
   linkedEWRs: string[];
+  coalition: Coalition;
 }
 
 export interface EWRSite {
@@ -30,6 +48,7 @@ export interface EWRSite {
   range: number;
   isActive: boolean;
   detectedThreats: number;
+  coalition: Coalition;
 }
 
 export type ThreatCategory = 'AIR' | 'SURFACE' | 'SUBSURFACE';
@@ -47,6 +66,7 @@ export interface Threat {
   threatLevel: ThreatLevel;
   firstDetected: number;
   lastSeen: number;
+  coalition: Coalition;
 }
 
 export interface Statistics {
@@ -63,6 +83,40 @@ export interface Statistics {
 export type DEFCONLevel = 'PEACE' | 'ELEVATED' | 'HIGH' | 'SEVERE' | 'CRITICAL';
 export type TacticalMode = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE' | 'AMBUSH';
 
+// マルチプレイヤー情報
+export interface Player {
+  id: number;
+  name: string;
+  coalition: Coalition;
+  slot: string;
+  ping: number;
+}
+
+export interface CoalitionInfo {
+  name: string;
+  playerCount: number;
+}
+
+export interface MultiplayerInfo {
+  isMultiplayer: boolean;
+  isServer: boolean;
+  serverName: string;
+  players: Player[];
+  coalitions: {
+    red: CoalitionInfo;
+    blue: CoalitionInfo;
+    neutral?: CoalitionInfo;
+  };
+}
+
+// コアリション別データ
+export interface CoalitionData {
+  samSites: Record<string, SAMSite>;
+  ewrSites: Record<string, EWRSite>;
+  threats: Record<string, Threat>;
+  statistics: Statistics;
+}
+
 export interface IADSState {
   timestamp: number;
   missionTime: string;
@@ -73,6 +127,20 @@ export interface IADSState {
   ewrSites: Record<string, EWRSite>;
   threats: Record<string, Threat>;
   statistics: Statistics;
+  multiplayer?: MultiplayerInfo;
+  coalitionData?: {
+    red: CoalitionData;
+    blue: CoalitionData;
+  };
+}
+
+// セッション
+export interface Session {
+  id: string;
+  coalition: Coalition;
+  accessLevel: AccessLevel;
+  playerName: string;
+  createdAt?: number;
 }
 
 // WebSocket events
