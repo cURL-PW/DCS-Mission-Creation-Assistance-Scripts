@@ -1,7 +1,9 @@
-import { MapContainer, TileLayer, Circle, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Circle, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import { LatLngExpression, divIcon } from 'leaflet';
-import { useIADSStore, useUIStore } from '../../store/iadsStore';
-import { SAMSite, Threat, EWRSite } from '../../types/iads';
+import 'leaflet/dist/leaflet.css';
+import { useIADSStore, useUIStore, useSessionStore } from '../../store/iadsStore';
+import { SAMSite, Threat, EWRSite, Coalition } from '../../types/iads';
+import { useMemo } from 'react';
 
 // SAM状態に応じた色を取得
 function getSAMColor(state: string): string {
@@ -151,29 +153,63 @@ function RangeCircle({ sam }: { sam: SAMSite }) {
   );
 }
 
+// 脅威レベルに応じた色
+function getThreatColor(level: string): string {
+  switch (level) {
+    case 'CRITICAL': return '#dc2626';
+    case 'HIGH': return '#f97316';
+    case 'MEDIUM': return '#eab308';
+    case 'LOW': return '#22c55e';
+    default: return '#9ca3af';
+  }
+}
+
 // 脅威マーカーコンポーネント
 function ThreatMarker({ threat }: { threat: Threat }) {
   const showThreats = useUIStore((s) => s.showThreats);
+  const { selectedThreat, setSelectedThreat } = useUIStore();
   if (!showThreats) return null;
 
   const position: LatLngExpression = [threat.position.lat, threat.position.lon];
+  const isSelected = selectedThreat === threat.id;
+
+  // 進行方向を示す矢印ライン
+  const headingRad = (threat.heading * Math.PI) / 180;
+  const lineLength = 0.03; // 約3km
+  const endLat = threat.position.lat + Math.cos(headingRad) * lineLength;
+  const endLon = threat.position.lon + Math.sin(headingRad) * lineLength;
+  const color = getThreatColor(threat.threatLevel);
 
   return (
-    <Marker
-      position={position}
-      icon={createThreatIcon(threat)}
-    >
-      <Popup>
-        <div className="text-sm">
-          <div className="font-bold">{threat.type}</div>
-          <div>Category: {threat.category}</div>
-          <div>Threat Level: {threat.threatLevel}</div>
-          <div>Speed: {Math.round(threat.speed)} m/s</div>
-          <div>Altitude: {Math.round(threat.altitude)} m</div>
-          {threat.isSEAD && <div className="text-orange-500 font-bold">SEAD THREAT</div>}
-        </div>
-      </Popup>
-    </Marker>
+    <>
+      <Marker
+        position={position}
+        icon={createThreatIcon(threat)}
+        eventHandlers={{
+          click: () => setSelectedThreat(threat.id)
+        }}
+      >
+        <Popup>
+          <div className="text-sm">
+            <div className="font-bold">{threat.type}</div>
+            <div>Category: {threat.category}</div>
+            <div>Threat Level: <span style={{ color }}>{threat.threatLevel}</span></div>
+            <div>Speed: {Math.round(threat.speed * 3.6)} km/h</div>
+            <div>Altitude: {Math.round(threat.altitude)} m</div>
+            <div>Heading: {Math.round(threat.heading)}°</div>
+            {threat.isSEAD && <div className="text-orange-500 font-bold">⚠ SEAD THREAT</div>}
+          </div>
+        </Popup>
+      </Marker>
+      <Polyline
+        positions={[position, [endLat, endLon]]}
+        pathOptions={{
+          color: threat.isSEAD ? '#f97316' : color,
+          weight: isSelected ? 3 : 2,
+          opacity: 0.8
+        }}
+      />
+    </>
   );
 }
 
@@ -255,9 +291,107 @@ function MapControls() {
   );
 }
 
+// マップ凡例
+function MapLegend() {
+  return (
+    <div className="absolute bottom-4 left-4 z-[1000] bg-gray-800/95 rounded-lg p-3 shadow-lg text-xs">
+      <div className="font-bold mb-2 text-gray-200">凡例</div>
+      <div className="space-y-1 text-gray-300">
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-green-500 inline-block"></span>
+          SAM (GREEN)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-yellow-500 inline-block"></span>
+          SAM (TRACKING)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-red-500 inline-block"></span>
+          SAM (ENGAGING)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded-full bg-gray-500 inline-block"></span>
+          SAM (DARK)
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 rounded bg-blue-500 inline-block"></span>
+          EWR
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-4 h-4 bg-red-500 inline-block" style={{ transform: 'rotate(45deg)' }}></span>
+          脅威
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 選択パネル
+function SelectionPanel({ sam, onClose }: { sam: SAMSite; onClose: () => void }) {
+  return (
+    <div className="absolute bottom-4 right-4 z-[1000] bg-gray-800/95 rounded-lg p-4 shadow-lg min-w-[250px]">
+      <div className="flex justify-between items-center mb-3">
+        <span className="font-bold text-white">{sam.name}</span>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-white"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="text-sm space-y-1 text-gray-300">
+        <div>Type: {sam.type}</div>
+        <div>State: <span style={{ color: getSAMColor(sam.state) }}>{sam.state}</span></div>
+        <div>Range: {(sam.range / 1000).toFixed(1)} km</div>
+        <div>Ammo: {sam.ammo}%</div>
+        <div>Health: {sam.health}%</div>
+        <div className="pt-2 flex gap-2">
+          <button className="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-xs text-white">
+            ACTIVATE
+          </button>
+          <button className="px-3 py-1 bg-gray-600 hover:bg-gray-700 rounded text-xs text-white">
+            DEACTIVATE
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MapView() {
   const state = useIADSStore((s) => s.state);
-  const { mapCenter, mapZoom } = useUIStore();
+  const { mapCenter, mapZoom, selectedSAM, setSelectedSAM } = useUIStore();
+  const { getCoalition, isGameMaster } = useSessionStore();
+
+  const coalition = getCoalition();
+  const gameMaster = isGameMaster();
+
+  // コアリションでフィルタリング
+  const sams = useMemo(() => {
+    if (!state?.samSites) return [];
+    return Object.values(state.samSites).filter(sam =>
+      gameMaster || sam.coalition === coalition
+    );
+  }, [state?.samSites, coalition, gameMaster]);
+
+  const threats = useMemo(() => {
+    if (!state?.threats) return [];
+    return Object.values(state.threats).filter(threat =>
+      gameMaster || threat.coalition !== coalition
+    );
+  }, [state?.threats, coalition, gameMaster]);
+
+  const ewrs = useMemo(() => {
+    if (!state?.ewrSites) return [];
+    return Object.values(state.ewrSites).filter(ewr =>
+      gameMaster || ewr.coalition === coalition
+    );
+  }, [state?.ewrSites, coalition, gameMaster]);
+
+  const selectedSAMData = useMemo(() => {
+    if (!selectedSAM) return null;
+    return sams.find(s => s.name === selectedSAM) || null;
+  }, [selectedSAM, sams]);
 
   if (!state) {
     return (
@@ -266,10 +400,6 @@ export default function MapView() {
       </div>
     );
   }
-
-  const sams = Object.values(state.samSites);
-  const threats = Object.values(state.threats);
-  const ewrs = Object.values(state.ewrSites);
 
   return (
     <div className="w-full h-full relative">
@@ -306,6 +436,14 @@ export default function MapView() {
       </MapContainer>
 
       <MapControls />
+      <MapLegend />
+
+      {selectedSAMData && (
+        <SelectionPanel
+          sam={selectedSAMData}
+          onClose={() => setSelectedSAM(null)}
+        />
+      )}
     </div>
   );
 }

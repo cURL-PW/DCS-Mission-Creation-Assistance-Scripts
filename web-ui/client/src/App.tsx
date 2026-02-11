@@ -6,6 +6,7 @@ import Layout from './components/common/Layout';
 import Dashboard from './components/Dashboard';
 import SAMList from './components/sam/SAMList';
 import ThreatMonitor from './components/threat/ThreatMonitor';
+import MapView from './components/map/MapView';
 import LoginPage from './components/LoginPage';
 
 function App() {
@@ -33,6 +34,7 @@ function App() {
       <Layout connected={connected}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/map" element={<MapView />} />
           <Route path="/sams" element={<SAMList />} />
           <Route path="/threats" element={<ThreatMonitor />} />
         </Routes>

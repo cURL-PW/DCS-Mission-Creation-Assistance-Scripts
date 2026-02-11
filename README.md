@@ -47,7 +47,11 @@ DCS-Mission-Creation-Assistance-Scripts/
 │   ├── point_defense.lua # ポイントディフェンス (Phase 2)
 │   ├── datalink.lua      # データリンク (Phase 2)
 │   ├── predictor.lua     # 航路予測 (Phase 2)
-│   └── maintenance.lua   # 修復/再配置 (Phase 3)
+│   ├── maintenance.lua   # 修復/再配置 (Phase 3)
+│   ├── terrain.lua       # 地形遮蔽シミュレーション (Phase 6)
+│   ├── network_resilience.lua  # ネットワーク劣化/回復 (Phase 6)
+│   ├── awacs.lua         # AWACS連携 (Phase 6)
+│   └── logistics.lua     # 補給・兵站システム (Phase 6)
 ├── countermeasures/
 │   ├── decoy.lua         # デコイ/おとり (Phase 3)
 │   └── anti_jam.lua      # ジャマー対策 (Phase 3)
@@ -1151,6 +1155,187 @@ fetch('/api/sams', {
 | COMMANDER | DEFCON/戦術モード変更可 |
 | ADMIN | 全権限（Game Master用） |
 
+## Phase 6 新機能
+
+### 地形遮蔽シミュレーション
+
+レーダーの見通し線（Line of Sight）を計算し、地形によるレーダー死角をシミュレートします。
+
+```lua
+local terrain = createTerrainSystem(iads, {
+    updateInterval = 5,
+    sampleInterval = 1000  -- 1km間隔でサンプリング
+})
+
+-- 特定の2点間のLOSチェック
+local losStatus, obstruction, distance = terrain:checkLineOfSight(
+    radarPos, targetPos, radarHeight, targetAltitude
+)
+
+-- SAMの実効射程計算（地形考慮）
+local effectiveRange = terrain:calculateEffectiveRange(samSite, direction, targetAltitude)
+
+-- 全方位カバレッジマップ生成
+local coverage = terrain:generateCoverageMap(samSite, {
+    angleStep = 10,
+    targetAltitude = 1000
+})
+
+-- 死角ゾーン検出
+local maskedZones = terrain:detectMaskedZones(samSite)
+
+-- 低空侵入経路検出
+local route = terrain:detectPenetrationRoutes(startPos, targetPos, 100)  -- 100m AGL
+```
+
+**LOS状態:**
+| 状態 | 説明 |
+|------|------|
+| CLEAR | 視通良好 |
+| MASKED | 地形遮蔽 |
+| HORIZON | 水平線以遠 |
+| PARTIAL | 部分遮蔽 |
+
+### ネットワーク劣化/回復シミュレーション
+
+データリンクノードの破壊や通信ジャミングによるネットワーク分断をシミュレートします。
+
+```lua
+local resilience = createNetworkResilienceSystem(iads, {
+    updateInterval = 3,
+    autoReroute = true,
+    maxHops = 5
+})
+
+-- ノード追加
+resilience:addNode("HQ", IADS_NETWORK_RESILIENCE.NODE_TYPE.COMMAND_CENTER, {
+    position = {x = 100000, z = 200000},
+    commRange = 200000
+})
+
+-- ノード破壊
+resilience:destroyNode("EWR_North")
+
+-- 通信ジャミング適用
+local jamArea = resilience:applyJamming(position, 50000, 80)  -- 50km半径、80%出力
+
+-- ジャミング解除
+resilience:removeJamming(1)
+
+-- 最適経路検索
+local path = resilience:findBestPath("SAM_South", IADS_NETWORK_RESILIENCE.NODE_TYPE.EWR)
+
+-- コールバック設定
+resilience:setCallback("onNodeIsolated", function(nodeName)
+    trigger.action.outText(nodeName .. " is isolated!", 10)
+end)
+```
+
+**ネットワーク健全性レベル:**
+| レベル | 説明 |
+|--------|------|
+| OPTIMAL | 最適 |
+| GOOD | 良好 |
+| DEGRADED | 劣化 |
+| CRITICAL | 危機的 |
+| FAILED | 機能停止 |
+
+### AWACS連携
+
+AWACSを移動式EWRとしてIADSネットワークに統合します。
+
+```lua
+local awacsSystem = createAWACSSystem(iads, {
+    updateInterval = 2,
+    fuelWarningThreshold = 30,
+    autoRTB = true,
+    datalink = datalinkSystem
+})
+
+-- AWACS登録
+awacsSystem:registerAWACS("AWACS_North", {
+    homeBase = "Kutaisi",
+    initialFuel = 100
+})
+
+-- 軌道ゾーン設定
+awacsSystem:setOrbitZone("AWACS_North", {
+    pattern = IADS_AWACS.ORBIT_PATTERN.RACETRACK,
+    center = {x = 150000, z = 250000},
+    altitude = 9000,
+    legLength = 80000
+})
+
+-- 配置開始
+awacsSystem:deployAWACS("AWACS_North")
+
+-- カバレッジ取得
+local coverage = awacsSystem:getTotalCoverage()
+
+-- コールバック設定
+awacsSystem:setCallback("onFuelWarning", function(name, fuel)
+    trigger.action.outText(name .. " BINGO FUEL: " .. fuel .. "%", 10)
+end)
+```
+
+**対応機種:**
+| 機種 | レーダー範囲 | 最大滞空時間 |
+|------|-------------|-------------|
+| E-3A Sentry | 400km | 11時間 |
+| E-2C Hawkeye | 270km | 5時間 |
+| A-50 Mainstay | 350km | 7時間 |
+
+### 補給・兵站システム
+
+SAMサイトの燃料・弾薬補給をシミュレートします。
+
+```lua
+local logistics = createLogisticsSystem(iads, {
+    updateInterval = 5,
+    fuelConsumptionRate = 0.5,  -- 1時間あたり0.5%
+    autoResupply = true,
+    resupplyThreshold = 50,
+    convoySpeed = 15  -- m/s
+})
+
+-- 補給デポ追加
+logistics:addDepot("Main_Depot", {x = 50000, z = 100000}, {
+    type = IADS_LOGISTICS.DEPOT_TYPE.MAIN,
+    missiles = 1000,
+    fuel = 10000,
+    vehicles = 5
+})
+
+-- 補給ルート設定
+logistics:setSupplyRoute("Main_Depot", "SA-10_Battery_1", {
+    {x = 60000, z = 120000},  -- ウェイポイント
+    {x = 70000, z = 140000}
+})
+
+-- 補給要請
+logistics:requestSupply("SA-10_Battery_1", IADS_LOGISTICS.SUPPLY_TYPE.MISSILES,
+    50, IADS_LOGISTICS.PRIORITY.HIGH)
+
+-- 車列派遣
+local convoy = logistics:dispatchConvoy("Main_Depot", "SA-10_Battery_1", {
+    [IADS_LOGISTICS.SUPPLY_TYPE.MISSILES] = 50,
+    [IADS_LOGISTICS.SUPPLY_TYPE.FUEL] = 30
+})
+
+-- コールバック設定
+logistics:setCallback("onConvoyDestroyed", function(convoy)
+    trigger.action.outText("Supply convoy destroyed!", 10)
+end)
+```
+
+**補給優先度:**
+| 優先度 | 説明 |
+|--------|------|
+| CRITICAL | 最優先 |
+| HIGH | 高 |
+| NORMAL | 通常 |
+| LOW | 低 |
+
 ## 開発ロードマップ
 
 ### Phase 1 (完了)
@@ -1181,6 +1366,13 @@ fetch('/api/sams', {
 - ✅ Bridge Server（Node.js + Express + WebSocket）
 - ✅ React SPA（Zustand + Tailwind CSS）
 - ✅ マルチプレイヤー対応（セッション管理、陣営別アクセス制御）
+- ✅ インタラクティブマップ表示（Leaflet）
+
+### Phase 6 (完了)
+- ✅ 地形遮蔽シミュレーション（LOS計算、死角検出）
+- ✅ ネットワーク劣化/回復シミュレーション（ノード破壊、ジャミング、冗長経路）
+- ✅ AWACS連携（移動式EWR、燃料管理、軌道パターン）
+- ✅ 補給・兵站システム（燃料消費、補給車列、デポ管理）
 
 ## ライセンス
 

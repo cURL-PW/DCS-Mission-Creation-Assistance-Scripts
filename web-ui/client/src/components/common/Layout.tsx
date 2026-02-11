@@ -18,6 +18,7 @@ export default function Layout({ children, connected }: LayoutProps) {
 
   const navItems = [
     { path: '/', label: 'Dashboard' },
+    { path: '/map', label: 'Map' },
     { path: '/sams', label: 'SAM Sites' },
     { path: '/threats', label: 'Threats' },
   ];
